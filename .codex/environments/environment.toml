@@ -1,0 +1,11 @@
+# Generated for Codex Local Environments. Keep this file in version control.
+version = 1
+name = "launchpad"
+
+[setup]
+script = "npm ci"
+
+[[actions]]
+name = "Run"
+icon = "run"
+command = "npm start"
