@@ -58,3 +58,102 @@ Write production-quality web application code with strong awareness of FRC strat
   - verification performed and its result;
   - the exact blocker;
   - the recommended next action.
+
+## Model Routing and Subagent Strategy
+
+Use the cheapest model that can reliably perform each part of the task. Prefer separating high-judgment planning from well-specified execution.
+
+### Default Workflow
+
+For non-trivial implementation tasks:
+
+1. **Plan with Sol Medium**
+   - Understand the user request and repository context.
+   - Inspect relevant code before proposing changes.
+   - Resolve architectural ambiguity.
+   - Identify affected files, interfaces, constraints, and tests.
+   - Produce a concrete implementation plan before delegating work.
+
+2. **Execute well-specified work with Luna High**
+   - Delegate implementation tasks only after their expected behavior and boundaries are clear.
+   - Luna subagents may:
+     - Implement localized code changes.
+     - Write or update tests.
+     - Run tests, linters, formatters, and builds.
+     - Fix straightforward failures.
+     - Perform mechanical refactors.
+     - Inspect or summarize clearly scoped portions of the repository.
+
+3. **Use Luna XHigh when execution requires substantial local reasoning**
+   - Prefer Luna High by default.
+   - Escalate a delegated task to Luna XHigh when it is still well-scoped but requires significant debugging, algorithmic reasoning, or interpretation of unfamiliar code.
+
+4. **Escalate back to Sol when judgment is required**
+   - A Luna subagent should not independently make major architectural or product decisions that were not covered by the plan.
+   - Return the problem to Sol when execution reveals:
+     - An architectural decision not anticipated by the plan.
+     - Conflicting requirements or repository conventions.
+     - Uncertainty about public APIs or data models.
+     - Changes that substantially expand task scope.
+     - Multiple reasonable implementations with meaningful tradeoffs.
+     - Repeated failed implementation attempts.
+     - Evidence that the original plan is incorrect.
+
+### Delegation Requirements
+
+Before spawning an execution subagent, give it enough context to work independently. Include:
+
+- The specific objective.
+- Relevant files or components.
+- Expected behavior.
+- Constraints and invariants.
+- Interfaces that must not change.
+- Tests or validation criteria.
+- Explicit non-goals where useful.
+
+Avoid delegating vague tasks such as:
+
+> "Implement the feature."
+
+Prefer:
+
+> "Implement plan step 3: add `FooController` using the interface defined in `FooService`. Do not modify the public API. Add unit tests covering X, Y, and Z. Run the affected test suite and report any failures."
+
+### Review
+
+For substantial changes, Sol should review the resulting implementation after delegated work completes.
+
+The review should verify:
+
+- The implementation still satisfies the original goal.
+- Architectural decisions match the approved plan.
+- Public interfaces and invariants were preserved.
+- Tests adequately cover the change.
+- Unnecessary complexity or scope creep was not introduced.
+
+Minor, mechanical tasks do not require a separate Sol review unless something unexpected occurred.
+
+### Tasks That Should Remain With Sol
+
+Do not delegate the core work to Luna when the task primarily involves:
+
+- Architecture or system design.
+- Ambiguous requirements.
+- Repository-wide design decisions.
+- Synthesizing large amounts of conflicting information.
+- Writing or substantially restructuring `AGENTS.md`.
+- Deciding conventions or policy.
+- Evaluating major technical tradeoffs.
+
+Luna may still assist with repository inspection or other bounded supporting work.
+
+### Efficiency Principle
+
+Do not use a more expensive model merely because it is available. Likewise, do not delegate work when the cost of explaining and reviewing the task exceeds the expected savings.
+
+Prefer:
+
+**Sol Medium → plan and resolve ambiguity**  
+**Luna High → execute clear work**  
+**Luna XHigh → execute difficult but bounded work**  
+**Sol Medium → review or resolve newly discovered ambiguity**

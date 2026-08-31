@@ -31,6 +31,7 @@ In the Codex desktop app, the checked-in local environment also installs depende
 | `npm run setup` | Clean-install dependencies and start the development server |
 | `npm run dev` | Start the development server when dependencies are already installed |
 | `npm start` | Stable development-server command used by Codex |
+| `npm run test` | Run the headless simulation engine tests |
 | `npm run typecheck` | Generate route types and check strict TypeScript |
 | `npm run build` | Build the production SPA into `build/client` |
 | `npm run check` | Run type checking and the production build |
@@ -43,6 +44,7 @@ In the Codex desktop app, the checked-in local environment also installs depende
 - `app/theme.tsx` owns system, light, and dark theme behavior.
 - `app/app.css` contains Tailwind and the shared CSS theme variables.
 - `app/components/ui` contains shadcn/ui source owned by this project.
+- `app/engine` contains the headless simulation engine. See its [usage and API documentation](app/engine/README.md).
 - `components.json` controls how future shadcn components are generated.
 
 ## Add a route
