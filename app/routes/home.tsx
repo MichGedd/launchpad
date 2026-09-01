@@ -9,7 +9,7 @@ export default function Home() {
     <VisualizerWorkspace
       features={DEFAULT_ROBOT_FEATURE_OPTIONS}
       generateReplay={createDemoReplay}
-      initialStrategy="Trace a smooth route across the field, collect an object, then finish in the scoring zone."
+      initialStrategy=""
     />
   );
 }

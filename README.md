@@ -1,6 +1,6 @@
 # Launchpad
 
-A small, local-first foundation for building a React single-page application.
+A local-first FRC strategy simulator with a React visualizer and a secure, same-origin LLM gateway.
 
 ## What is included
 
@@ -29,7 +29,7 @@ In the Codex desktop app, the checked-in local environment also installs depende
 | Command | Purpose |
 | --- | --- |
 | `npm run setup` | Clean-install dependencies and start the development server |
-| `npm run dev` | Start the development server when dependencies are already installed |
+| `npm run dev` | Start the visualizer and same-origin API development server |
 | `npm start` | Stable development-server command used by Codex |
 | `npm run test` | Run the headless simulation engine tests |
 | `npm run typecheck` | Generate route types and check strict TypeScript |
@@ -45,6 +45,8 @@ In the Codex desktop app, the checked-in local environment also installs depende
 - `app/app.css` contains Tailwind and the shared CSS theme variables.
 - `app/components/ui` contains shadcn/ui source owned by this project.
 - `app/engine` contains the headless simulation engine. See its [usage and API documentation](app/engine/README.md).
+- `app/llm` contains the shared LLM contracts, compact prompt adapter, session statistics, and strategy-planning service.
+- `server/index.ts` keeps user-supplied API keys in process memory and exposes the same-origin LLM API.
 - `components.json` controls how future shadcn components are generated.
 
 ## Add a route
@@ -67,4 +69,17 @@ Edit the semantic values under `:root` and `.dark` in `app/app.css`. Components 
 
 ## Deploying later
 
-The production build is static. Configure a future host to serve `build/client/index.html` for every application URL so client-side routes can load directly.
+Run `npm run build`, set `NODE_ENV=production`, and start the Node server. The server serves `build/client`, falls back to the SPA entry point, and keeps LLM credentials out of browser bundles. Any remotely accessible deployment must terminate HTTPS before accepting API keys.
+
+## Test the LLM flow without API charges
+
+The automated LLM tests inject a deterministic mock runner and never read an OpenAI API key or make a provider request. Run `npm run test` for schemas, prompt construction, session statistics, model-service behavior, the engine, and visualizer utilities. A real provider call occurs only after a user enters a key in Configure and explicitly selects Generate.
+
+For a manual visual check, start the development server with its local mock runner:
+
+```powershell
+$env:LAUNCHPAD_MOCK_LLM="1"
+npm run dev
+```
+
+Open Launchpad, choose **Configure**, and enter a clearly fake value such as `local-mock-only` in the API-key field. Saving, generating, and opening **Report Statistics** then exercise the full browser-to-server flow with deterministic output and token counts, without contacting OpenAI. Stop the server and remove the environment variable with `Remove-Item Env:LAUNCHPAD_MOCK_LLM` before testing the real provider. Mock mode is ignored in production.

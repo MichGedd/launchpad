@@ -5,6 +5,7 @@ import {
   GaugeIcon,
   InfoIcon,
   LoaderCircleIcon,
+  BarChart3Icon,
   PauseIcon,
   PinIcon,
   PlayIcon,
@@ -18,7 +19,6 @@ import {
   useMemo,
   useRef,
   useState,
-  type FormEvent,
 } from "react";
 
 import { ThemeMenu } from "~/components/theme-menu";
@@ -38,8 +38,40 @@ import {
 import { FieldViewport } from "./field-viewport";
 import { ReplayDetails } from "./replay-details";
 import { RobotCustomizationDialog } from "./robot-customization-dialog";
+import { LlmConfigurationDialog } from "./llm-configuration-dialog";
+import { LlmStatisticsDialog } from "./llm-statistics-dialog";
+import { StrategyPlanDialog } from "./strategy-plan-dialog";
+import {
+  disconnectLlm,
+  generateStrategyPlan,
+  getLlmConfiguration,
+  getLlmStatistics,
+  saveLlmConfiguration,
+  type LlmConfigurationRequest,
+  type LlmConfigurationStatus,
+  type LlmStatistics,
+  type StrategyPlan,
+} from "~/llm/client";
 
 const PLAYBACK_SPEEDS = [0.5, 1, 2] as const;
+const NEUTRAL_ACTION_METADATA = [
+  {
+    id: "drive-to",
+    description: "Drive to a field pose using xFeet, yFeet, and headingRotations parameters.",
+  },
+  {
+    id: "collect-object",
+    description: "Collect one game object while contacting an eligible pickup zone.",
+    zoneKind: "pickup" as const,
+    zoneTags: ["game-object"],
+  },
+  {
+    id: "score-object",
+    description: "Score one carried game object while contacting an eligible score zone.",
+    zoneKind: "score" as const,
+    zoneTags: ["game-object"],
+  },
+] as const;
 
 interface VisualizerWorkspaceProps {
   readonly features: readonly RobotFeatureOption[];
@@ -70,9 +102,16 @@ function VisualizerWorkspace({
   const [playbackSpeed, setPlaybackSpeed] = useState<(typeof PLAYBACK_SPEEDS)[number]>(1);
   const [isPlaying, setIsPlaying] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
+  const [isPlanGenerating, setIsPlanGenerating] = useState(false);
   const [generationError, setGenerationError] = useState<string | null>(null);
   const [isFeatureRailCollapsed, setIsFeatureRailCollapsed] = useState(false);
   const [isRobotCustomizationOpen, setIsRobotCustomizationOpen] = useState(false);
+  const [llmConfiguration, setLlmConfiguration] = useState<LlmConfigurationStatus | null>(null);
+  const [isLlmConfigurationOpen, setIsLlmConfigurationOpen] = useState(false);
+  const [statistics, setStatistics] = useState<LlmStatistics | null>(null);
+  const [isStatisticsOpen, setIsStatisticsOpen] = useState(false);
+  const [strategyPlan, setStrategyPlan] = useState<StrategyPlan | null>(null);
+  const [isStrategyPlanOpen, setIsStrategyPlanOpen] = useState(false);
   const [isTimelinePinned, setIsTimelinePinned] = useState(false);
   const initialized = useRef(false);
 
@@ -96,10 +135,93 @@ function VisualizerWorkspace({
     }
   }
 
+  async function handleGenerateStrategy() {
+    if (!llmConfiguration?.configured || isPlanGenerating) return;
+    setIsPlanGenerating(true);
+    setGenerationError(null);
+
+    try {
+      const response = await generateStrategyPlan({
+        strategy,
+        selectedFeatureIds: [...selectedFeatureIds],
+        robotCustomization: {
+          widthFeet: robotCustomization.widthFeet,
+          lengthFeet: robotCustomization.lengthFeet,
+          translationSpeedFeetPerSecond: robotCustomization.translationSpeedFeetPerSecond,
+          spinSpeedRotationsPerSecond: robotCustomization.spinSpeedRotationsPerSecond,
+        },
+        enabledActions: NEUTRAL_ACTION_METADATA.filter((action) =>
+          (action.id === "drive-to" && selectedFeatureIds.includes("drive-planning"))
+          || (action.id === "collect-object" && selectedFeatureIds.includes("object-intake"))
+          || (action.id === "score-object" && selectedFeatureIds.includes("goal-scoring")),
+        ).map((action) => ({
+          ...action,
+          ...(Object.hasOwn(action, "zoneTags")
+            ? { zoneTags: [...(action as { readonly zoneTags: readonly string[] }).zoneTags] }
+            : {}),
+        })),
+        decisionContext: {
+          currentTimeSeconds,
+          durationSeconds: scene?.playback.timing.durationSeconds ?? 0,
+          status: frame?.status ?? "ready",
+        },
+      });
+      setStrategyPlan(response.plan);
+      setIsStrategyPlanOpen(true);
+      setStatistics(response.statistics ?? (await getLlmStatistics()));
+    } catch (error) {
+      setGenerationError(
+        error instanceof Error ? error.message : "The strategy plan could not be generated. Try again.",
+      );
+      try {
+        setStatistics(await getLlmStatistics());
+      } catch {
+        // Keep the generation error visible when the statistics endpoint is unavailable.
+      }
+    } finally {
+      setIsPlanGenerating(false);
+    }
+  }
+
+  async function handleSaveLlmConfiguration(nextConfiguration: LlmConfigurationRequest) {
+    setLlmConfiguration(await saveLlmConfiguration(nextConfiguration));
+  }
+
+  async function handleDisconnectLlm() {
+    await disconnectLlm();
+    setLlmConfiguration({
+      configured: false,
+      model: "gpt-5.6-luna",
+      provider: "openai",
+      reasoningEffort: "low",
+    });
+    setStatistics(null);
+    setStrategyPlan(null);
+  }
+
+  async function openStatistics() {
+    setIsStatisticsOpen(true);
+    try {
+      setStatistics(await getLlmStatistics());
+    } catch {
+      // The empty state remains useful while the session has no recorded requests.
+    }
+  }
+
   useEffect(() => {
     if (initialized.current) return;
     initialized.current = true;
     void handleGenerate();
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    void getLlmConfiguration().then((configuration) => {
+      if (active) setLlmConfiguration(configuration);
+    });
+    return () => {
+      active = false;
+    };
   }, []);
 
   useEffect(() => {
@@ -139,11 +261,6 @@ function VisualizerWorkspace({
   );
   const durationSeconds = scene?.playback.timing.durationSeconds ?? 0;
   const status = isGenerating ? "Generating" : frame?.status ?? "Ready";
-
-  function submitStrategy(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    void handleGenerate();
-  }
 
   function toggleFeature(featureId: string) {
     setSelectedFeatureIds((currentIds) =>
@@ -191,31 +308,50 @@ function VisualizerWorkspace({
           </div>
         </header>
 
-        <form className="glass-panel mb-[clamp(12px,2vh,20px)] shrink-0 rounded-[24px] p-3" onSubmit={submitStrategy}>
+        <form className="glass-panel mb-[clamp(12px,2vh,20px)] shrink-0 rounded-[24px] p-3" onSubmit={(event) => {
+          event.preventDefault();
+          void handleGenerateStrategy();
+        }}>
           <label className="sr-only" htmlFor="strategy-input">Strategy</label>
           <textarea
-            className="h-[clamp(52px,7.5vh,64px)] w-full resize-none rounded-2xl border border-white/10 bg-black/10 px-4 py-3 text-sm leading-6 text-foreground outline-none placeholder:text-muted-foreground dark:bg-black/15"
+            className="h-[clamp(52px,7.5vh,64px)] w-full resize-none rounded-2xl border border-white/10 bg-black/10 px-4 py-3 text-sm leading-6 text-foreground outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:bg-black/20 disabled:text-muted-foreground dark:bg-black/15"
+            disabled={llmConfiguration === null || !llmConfiguration.configured || isPlanGenerating}
             id="strategy-input"
             onChange={(event) => setStrategy(event.target.value)}
-            placeholder="Describe how the robot should move and act during the match…"
+            placeholder={llmConfiguration?.configured ? "Describe how the robot should move and act during the match…" : "Please configure your LLM"}
             value={strategy}
           />
           <div className="mt-2 flex items-center justify-between gap-4 px-1">
             <p aria-live="polite" className={`text-xs ${generationError ? "text-red-300" : "text-muted-foreground"}`}>
-              {generationError ?? "Demo mode uses a deterministic neutral route until a strategy controller is connected."}
+              {generationError ?? (llmConfiguration?.configured ? "Describe a strategy for ChatGPT to turn into an action plan." : "Configure ChatGPT to generate a strategy plan.")}
             </p>
-            <Button
-              className="h-10 rounded-xl px-4 text-sm shadow-lg shadow-orange-950/20"
-              disabled={isGenerating}
-              type="submit"
-            >
-              {isGenerating ? (
-                <LoaderCircleIcon aria-hidden="true" className="animate-spin" />
-              ) : (
-                <SparklesIcon aria-hidden="true" />
-              )}
-              {isGenerating ? "Generating" : "Generate replay"}
-            </Button>
+            <div className="flex items-center gap-2">
+              <Dialog onOpenChange={setIsLlmConfigurationOpen} open={isLlmConfigurationOpen}>
+                <DialogTrigger render={<Button className="h-10 rounded-xl px-3 text-sm" type="button" variant="ghost" />}>
+                  <Settings2Icon aria-hidden="true" />
+                  Configure
+                </DialogTrigger>
+                <LlmConfigurationDialog
+                  configuration={llmConfiguration}
+                  onDisconnect={handleDisconnectLlm}
+                  onOpenChange={setIsLlmConfigurationOpen}
+                  onSave={handleSaveLlmConfiguration}
+                  open={isLlmConfigurationOpen}
+                />
+              </Dialog>
+              <Button aria-label="Report statistics" className="h-10 rounded-xl px-3 text-sm" onClick={() => void openStatistics()} type="button" variant="ghost">
+                <BarChart3Icon aria-hidden="true" />
+                Report Statistics
+              </Button>
+              <Button
+                className="h-10 rounded-xl px-4 text-sm shadow-lg shadow-orange-950/20"
+                disabled={llmConfiguration === null || !llmConfiguration.configured || isPlanGenerating}
+                type="submit"
+              >
+                {isPlanGenerating ? <LoaderCircleIcon aria-hidden="true" className="animate-spin" /> : <SparklesIcon aria-hidden="true" />}
+                {isPlanGenerating ? "Generating" : "Generate"}
+              </Button>
+            </div>
           </div>
         </form>
 
@@ -416,6 +552,13 @@ function VisualizerWorkspace({
           </section>
         </div>
       </div>
+
+      <Dialog onOpenChange={setIsStrategyPlanOpen} open={isStrategyPlanOpen}>
+        <StrategyPlanDialog plan={strategyPlan} />
+      </Dialog>
+      <Dialog onOpenChange={setIsStatisticsOpen} open={isStatisticsOpen}>
+        <LlmStatisticsDialog statistics={statistics} />
+      </Dialog>
     </main>
   );
 }
