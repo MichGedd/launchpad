@@ -122,6 +122,7 @@ const simulation = createSimulation(game, robot, options);
 | `timing` | `MatchTiming` | Optional match and endgame durations. Defaults to 135 and 30 seconds. |
 | `actions` | `readonly ActionDefinition[]` | Optional registered game-specific actions. |
 | `robotFeatures` | `readonly RobotFeature[]` | Optional features mapping selectable feature IDs to action IDs. |
+| `rankingPoints` | `readonly RankingPointDefinition[]` | Optional season-defined ranking points with stable IDs, display labels, and values that default to one. |
 
 Game definitions belong on season branches. The engine on `master` remains season-independent.
 
@@ -139,6 +140,11 @@ Game definitions belong on season branches. The engine on `master` remains seaso
 | `spinSpeedRotationsPerSecond` | No | Defaults to 1. |
 
 The total capacity is enforced in addition to every configured per-object capacity.
+
+Scoring rules remain season-specific. Actions report point changes and normalized
+ranking-point progress to the engine, which records the resulting `MatchMetrics`
+in decision state and playback frames. Ranking-point progress is clamped to
+`[0, 1]` and becomes earned at `1`.
 
 #### `SimulationOptions`
 
@@ -216,6 +222,8 @@ const collectBall = createZoneInteractionAction({
   durationSeconds: 0.5,
   successProbability: 0.9,
   inventoryDeltaOnSuccess: { ball: 1 },
+  pointsOnSuccess: 3,
+  rankingPointProgressDeltaOnSuccess: { collection: 0.25 },
   successEventType: "ball-collected",
 });
 ```
@@ -283,7 +291,9 @@ const waitAction: ActionDefinition<WaitRequest, WaitState> = {
 - `advance` receives an immutable robot snapshot, zones, current simulation time, seeded random function, contact helper, and the remaining time budget.
 - `consumedSeconds` must be finite, non-negative, and no greater than `availableSeconds`.
 - An incomplete action must consume time; otherwise the engine throws to prevent an infinite loop.
-- `inventoryDelta` and custom `events` may be returned from `advance`.
+- `inventoryDelta`, `pointsDelta`, `rankingPointProgressDelta`, and custom
+  `events` may be returned from `advance`. Ranking-point IDs must be declared by
+  the game definition.
 
 ## Zones and collision behavior
 
@@ -319,6 +329,7 @@ Pathfinding around obstacles is planned as a future engine improvement. For now,
 
 - Simulation status, elapsed time, remaining time, and endgame state.
 - Robot pose, footprint configuration, speeds, capacities, and inventory.
+- Cumulative points and per-type ranking-point progress in `metrics`.
 - Active and queued action summaries.
 - Enabled action metadata.
 - Feature-relevant pickup and score zones.
@@ -340,7 +351,10 @@ if (playback) {
 }
 ```
 
-The returned structure is a detached, deeply frozen snapshot containing match timing, zones, robot frames, and timestamped action events. Recording is disabled by default to avoid retaining every frame during large aggregate runs.
+The returned structure is a detached, deeply frozen snapshot containing match
+timing, zones, normalized ranking-point definitions, robot and metric frames,
+and timestamped action events. Recording is disabled by default to avoid
+retaining every frame during large aggregate runs.
 
 Engine-generated events include:
 
@@ -349,6 +363,8 @@ Engine-generated events include:
 - `action-blocked`
 - `action-interrupted`
 - `inventory-changed`
+- `points-changed`
+- `ranking-point-progress-changed`
 - `simulation-complete`
 - Zone-interaction success or failure events
 

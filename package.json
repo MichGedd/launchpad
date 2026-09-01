@@ -14,7 +14,7 @@
     "dev": "react-router dev",
     "setup": "npm ci && npm start",
     "start": "react-router dev",
-    "test": "node --experimental-strip-types --test app/engine/*.test.ts",
+    "test": "node --experimental-strip-types --test app/engine/*.test.ts app/visualizer/*.test.ts",
     "typecheck": "react-router typegen && tsc --noEmit"
   },
   "dependencies": {

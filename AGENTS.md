@@ -45,6 +45,63 @@ Write production-quality web application code with strong awareness of FRC strat
 - Make the smallest diff that completely solves the request. Preserve unrelated user changes.
 - Do not add placeholders, `TODO` comments, speculative fallbacks, or unused abstractions.
 
+## Visualizer UI style guide
+
+The visualizer should feel simple, elegant, and sleek. Treat the field as the
+primary workspace and keep every supporting control visually quiet until it is
+needed.
+
+### Color and typography
+
+- Use Geist for all interface text. Prefer medium weights for controls and
+  semibold weights for short headings; avoid decorative typography.
+- Use `#808588` as the neutral foundation color. Dark and light surfaces may use
+  derived tints, but the foundation color should remain recognizable in the
+  field and page atmosphere.
+- Use `#F7931E` for primary actions, active transport controls, and intentional
+  emphasis. Do not use orange as general decoration.
+- Use `#21409A` for robot state, replay data, informational focus, and selected
+  data. Destructive and warning states must keep their conventional semantics.
+- Maintain WCAG AA contrast for text and controls. Never place low-opacity text
+  directly over a detailed field image without a glass or solid backing.
+
+### Shape, depth, and spacing
+
+- Prefer rounded rectangles throughout: 12px for compact controls, 16px for
+  inputs, 20px for panels, and 24-28px for major workspace surfaces.
+- Glass panels use a translucent neutral fill, a subtle one-pixel light border,
+  20-24px backdrop blur, and one soft shadow. Avoid stacked borders, heavy glow,
+  or multiple competing shadow styles.
+- Use an 8px spacing rhythm. Keep dense transport controls compact while giving
+  strategy inputs and the field generous breathing room.
+- The desktop visualizer targets viewports at least 1024px wide. Preserve a
+  field-first hierarchy rather than shrinking the field to accommodate panels.
+
+### Components and interaction
+
+- Use Tailwind utilities for layout and local styling, shadcn/Base UI primitives
+  for accessible interaction behavior, and Lucide icons for interface symbols.
+  Extend existing primitives before introducing one-off control patterns.
+- Keep the product single-page. Dialogs, sheets, menus, settings, replay details,
+  and future tabs must overlay the visualizer rather than navigate away or open
+  a separate browser window.
+- Motion should explain state changes and normally complete in 160-240ms. Honor
+  `prefers-reduced-motion`, keep focus rings visible, and provide text labels or
+  accessible names for every icon-only control.
+- Orange communicates actions; blue communicates data. Do not mix their roles
+  merely to add color.
+
+### Field and season boundaries
+
+- Keep the visualizer on `master` season-independent. Receive field dimensions,
+  optional background presentation, features, and playback through typed data
+  instead of importing season assets or rules.
+- Map visualizer coordinates from a bottom-left origin with positive Y upward,
+  and document any season adapter that uses a different source convention.
+- When the user supplies reference images, use the available Playwright
+  interactive browser workflow to compare the implementation at the requested
+  viewport. Treat rough sketches as hierarchy guidance, not exact measurements.
+
 ## Workflow
 
 - For non-trivial changes, begin in read-only plan mode (`/plan`) and present the implementation plan for user review before editing files.

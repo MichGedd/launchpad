@@ -21,6 +21,8 @@ export interface ZoneInteractionActionConfiguration {
   readonly successProbability: number;
   readonly requiredInventory?: Readonly<Record<string, number>>;
   readonly inventoryDeltaOnSuccess?: Readonly<Record<string, number>>;
+  readonly pointsOnSuccess?: number;
+  readonly rankingPointProgressDeltaOnSuccess?: Readonly<Record<string, number>>;
   readonly successEventType?: string;
 }
 
@@ -96,6 +98,14 @@ export function createZoneInteractionAction(
       throw new Error(`Action "${configuration.id}" ${objectType} inventory delta must be an integer.`);
     }
   }
+  if (configuration.pointsOnSuccess !== undefined && !Number.isFinite(configuration.pointsOnSuccess)) {
+    throw new Error(`Action "${configuration.id}" points on success must be finite.`);
+  }
+  for (const [rankingPointId, change] of Object.entries(configuration.rankingPointProgressDeltaOnSuccess ?? {})) {
+    if (!Number.isFinite(change)) {
+      throw new Error(`Action "${configuration.id}" ${rankingPointId} ranking-point progress delta must be finite.`);
+    }
+  }
 
   const metadata: ActionMetadata = {
     id: configuration.id,
@@ -133,6 +143,8 @@ export function createZoneInteractionAction(
         consumedSeconds,
         complete: true,
         inventoryDelta: successful ? configuration.inventoryDeltaOnSuccess : undefined,
+        pointsDelta: successful ? configuration.pointsOnSuccess : undefined,
+        rankingPointProgressDelta: successful ? configuration.rankingPointProgressDeltaOnSuccess : undefined,
         events: [{
           type: successful ? (configuration.successEventType ?? "zone-interaction-succeeded") : "zone-interaction-failed",
           details: { zoneId: state.zoneId, successful },

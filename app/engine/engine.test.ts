@@ -280,6 +280,120 @@ describe("action registration, inventory, and probabilities", () => {
     simulation.queueActions([{ actionId: "wait", parameters: { durationSeconds: 0.35 } }]);
     assertClose(simulation.runUntilDecision().elapsedSeconds, 0.35);
   });
+
+  test("tracks declarative scoring only after a successful interaction", () => {
+    const score = createZoneInteractionAction({
+      id: "score-ball",
+      description: "Score one ball",
+      zone: { kind: "score", zoneIds: ["goal"] },
+      durationSeconds: 0.2,
+      successProbability: 1,
+      pointsOnSuccess: 4,
+      rankingPointProgressDeltaOnSuccess: { mobility: 0.6 },
+    });
+    const game: GameDefinition = {
+      gameObjectTypes: [],
+      zones: [{
+        id: "goal",
+        kind: "score",
+        shape: { type: "circle", center: { xFeet: 0, yFeet: 0 }, radiusFeet: 1 },
+      }],
+      rankingPoints: [{ id: "mobility", label: "Mobility" }],
+      actions: [score],
+      robotFeatures: [{ id: "scoring", actionIds: [score.metadata.id] }],
+    };
+    const simulation = createSimulation(game, robot({ selectedFeatureIds: ["scoring"] }), { recordPlayback: true });
+    assert.deepEqual(simulation.getDecisionState().metrics, {
+      points: 0,
+      rankingPoints: { mobility: { progress: 0, earned: false } },
+    });
+    simulation.queueActions([{ actionId: score.metadata.id, parameters: {} }]);
+    const state = simulation.runUntilDecision();
+    assert.equal(state.metrics.points, 4);
+    assert.deepEqual(state.metrics.rankingPoints.mobility, { progress: 0.6, earned: false });
+    const playback = simulation.exportPlayback()!;
+    assert.deepEqual(playback.rankingPointDefinitions, [{ id: "mobility", label: "Mobility", value: 1 }]);
+    assert.equal(playback.frames.at(-1)!.metrics.points, 4);
+    assert.equal(playback.events.some((event) => event.type === "points-changed"), true);
+    assert.equal(playback.events.some((event) => event.type === "ranking-point-progress-changed"), true);
+
+    const failedScore = createZoneInteractionAction({
+      id: "failed-score",
+      description: "Failed score",
+      zone: { kind: "score", zoneIds: ["goal"] },
+      durationSeconds: 0.2,
+      successProbability: 0,
+      pointsOnSuccess: 8,
+      rankingPointProgressDeltaOnSuccess: { mobility: 1 },
+    });
+    const failedGame = { ...game, actions: [failedScore], robotFeatures: [{ id: "scoring", actionIds: [failedScore.metadata.id] }] };
+    const failedSimulation = createSimulation(failedGame, robot({ selectedFeatureIds: ["scoring"] }), { recordPlayback: true });
+    failedSimulation.queueActions([{ actionId: failedScore.metadata.id, parameters: {} }]);
+    assert.deepEqual(failedSimulation.runUntilDecision().metrics, {
+      points: 0,
+      rankingPoints: { mobility: { progress: 0, earned: false } },
+    });
+  });
+
+  test("clamps ranking-point progress, supports negative points, and rejects invalid telemetry", () => {
+    interface RuntimeState { readonly complete: boolean }
+    const telemetryAction = (id: string, result: {
+      readonly pointsDelta?: number;
+      readonly rankingPointProgressDelta?: Readonly<Record<string, number>>;
+    }): ActionDefinition<Record<string, never>, RuntimeState> => ({
+      metadata: { id, description: "Telemetry" },
+      validate: () => ({ valid: true, value: {} }),
+      start: () => ({ ready: true, state: { complete: false } }),
+      advance: () => ({ ...result, state: { complete: true }, consumedSeconds: 0.1, complete: true }),
+    });
+    const action = telemetryAction("telemetry-success", { pointsDelta: 3, rankingPointProgressDelta: { bonus: 1.5 } });
+    const simulation = createSimulation({
+      gameObjectTypes: [],
+      zones: [],
+      rankingPoints: [{ id: "bonus", label: "Bonus", value: 2 }],
+      actions: [action],
+      robotFeatures: [{ id: "telemetry", actionIds: [action.metadata.id] }],
+    }, robot({ selectedFeatureIds: ["telemetry"] }));
+    simulation.queueActions([{ actionId: action.metadata.id, parameters: {} }]);
+    assert.deepEqual(simulation.runUntilDecision().metrics, {
+      points: 3,
+      rankingPoints: { bonus: { progress: 1, earned: true } },
+    });
+
+    const negativeProgress = telemetryAction("telemetry-negative-progress", {
+      rankingPointProgressDelta: { bonus: -2 },
+    });
+    const negativeProgressSimulation = createSimulation({
+      gameObjectTypes: [],
+      zones: [],
+      rankingPoints: [{ id: "bonus", label: "Bonus" }],
+      actions: [negativeProgress],
+      robotFeatures: [{ id: "telemetry", actionIds: [negativeProgress.metadata.id] }],
+    }, robot({ selectedFeatureIds: ["telemetry"] }));
+    negativeProgressSimulation.queueActions([
+      { actionId: negativeProgress.metadata.id, parameters: {} },
+    ]);
+    assert.deepEqual(negativeProgressSimulation.runUntilDecision().metrics.rankingPoints.bonus, {
+      progress: 0,
+      earned: false,
+    });
+
+    const invalidPoints = telemetryAction("telemetry-invalid-points", { pointsDelta: Number.NaN });
+    const invalidSimulation = createSimulation({
+      gameObjectTypes: [], zones: [], actions: [invalidPoints],
+      robotFeatures: [{ id: "telemetry", actionIds: [invalidPoints.metadata.id] }],
+    }, robot({ selectedFeatureIds: ["telemetry"] }));
+    invalidSimulation.queueActions([{ actionId: invalidPoints.metadata.id, parameters: {} }]);
+    assert.throws(() => invalidSimulation.runUntilDecision(), /non-finite points delta/);
+
+    const unknownRankingPoint = telemetryAction("telemetry-unknown-ranking-point", { rankingPointProgressDelta: { missing: 0.5 } });
+    const unknownSimulation = createSimulation({
+      gameObjectTypes: [], zones: [], actions: [unknownRankingPoint],
+      robotFeatures: [{ id: "telemetry", actionIds: [unknownRankingPoint.metadata.id] }],
+    }, robot({ selectedFeatureIds: ["telemetry"] }));
+    unknownSimulation.queueActions([{ actionId: unknownRankingPoint.metadata.id, parameters: {} }]);
+    assert.throws(() => unknownSimulation.runUntilDecision(), /unknown ranking-point ID/);
+  });
 });
 
 test("optional playback is detached and deeply immutable", () => {
@@ -293,6 +407,16 @@ test("optional playback is detached and deeply immutable", () => {
   assert.equal(Object.isFrozen(playback), true);
   assert.equal(Object.isFrozen(playback.frames), true);
   assert.equal(Object.isFrozen(playback.frames[0]!.robot.pose), true);
+
+  const metricsPlayback = createSimulation({
+    ...EMPTY_GAME,
+    rankingPoints: [{ id: "bonus", label: "Bonus" }],
+  }, robot(), { recordPlayback: true }).exportPlayback()!;
+  assert.equal(Object.isFrozen(metricsPlayback.rankingPointDefinitions), true);
+  assert.equal(Object.isFrozen(metricsPlayback.rankingPointDefinitions[0]), true);
+  assert.equal(Object.isFrozen(metricsPlayback.frames[0]!.metrics), true);
+  assert.equal(Object.isFrozen(metricsPlayback.frames[0]!.metrics.rankingPoints), true);
+  assert.equal(Object.isFrozen(metricsPlayback.frames[0]!.metrics.rankingPoints.bonus), true);
 });
 
 describe("definition validation", () => {
@@ -361,6 +485,17 @@ describe("definition validation", () => {
       gameObjectTypes: [], zones: [],
       robotFeatures: [{ id: "feature", actionIds: [] }, { id: "feature", actionIds: [] }],
     }, robot()), /feature IDs must be unique/);
+    assert.throws(() => createSimulation({
+      gameObjectTypes: [], zones: [], rankingPoints: [{ id: "", label: "Empty" }],
+    }, robot()), /Ranking-point IDs cannot be empty/);
+    assert.throws(() => createSimulation({
+      gameObjectTypes: [], zones: [], rankingPoints: [
+        { id: "bonus", label: "Bonus" }, { id: "bonus", label: "Duplicate" },
+      ],
+    }, robot()), /Duplicate ranking-point ID/);
+    assert.throws(() => createSimulation({
+      gameObjectTypes: [], zones: [], rankingPoints: [{ id: "bonus", label: "Bonus", value: Number.NaN }],
+    }, robot()), /value must be finite/);
   });
 
   test("validates action references for unselected features", () => {

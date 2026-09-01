@@ -22,11 +22,14 @@ import {
   type DecisionState,
   type GameDefinition,
   type MatchTiming,
+  type MatchMetrics,
   type PlaybackFrame,
   type Pose,
   type QueueResult,
   type RobotConfiguration,
   type RobotState,
+  type RankingPointDefinition,
+  type RankingPointState,
   type SimulationBlock,
   type SimulationOptions,
   type SimulationPlayback,
@@ -81,6 +84,18 @@ function validateGame(game: GameDefinition): void {
   }
   if (new Set(game.gameObjectTypes).size !== game.gameObjectTypes.length) {
     throw new Error("Game-object type IDs must be unique.");
+  }
+  const rankingPointIds = new Set<string>();
+  for (const rankingPoint of game.rankingPoints ?? []) {
+    if (rankingPoint.id.length === 0) throw new Error("Ranking-point IDs cannot be empty.");
+    if (rankingPointIds.has(rankingPoint.id)) {
+      throw new Error(`Duplicate ranking-point ID "${rankingPoint.id}".`);
+    }
+    rankingPointIds.add(rankingPoint.id);
+    if (rankingPoint.label.length === 0) throw new Error(`Ranking point "${rankingPoint.id}" labels cannot be empty.`);
+    if (rankingPoint.value !== undefined && (!Number.isFinite(rankingPoint.value) || rankingPoint.value < 0)) {
+      throw new Error(`Ranking point "${rankingPoint.id}" value must be finite and non-negative.`);
+    }
   }
   const validatePoint = (point: { readonly xFeet: number; readonly yFeet: number }, label: string): void => {
     if (!Number.isFinite(point.xFeet) || !Number.isFinite(point.yFeet)) {
@@ -178,18 +193,58 @@ function cloneRobot(robot: MutableRobotState): RobotState {
   });
 }
 
+interface MutableMatchMetrics {
+  points: number;
+  rankingPoints: Record<string, RankingPointState>;
+}
+
+function normalizeRankingPointDefinitions(
+  definitions: readonly RankingPointDefinition[] | undefined,
+): readonly Required<RankingPointDefinition>[] {
+  return (definitions ?? []).map((definition) => ({
+    id: definition.id,
+    label: definition.label,
+    value: definition.value ?? 1,
+  }));
+}
+
+function cloneMetrics(metrics: MutableMatchMetrics): MatchMetrics {
+  const rankingPoints: Record<string, RankingPointState> = {};
+  for (const [id, state] of Object.entries(metrics.rankingPoints)) {
+    rankingPoints[id] = Object.freeze({ ...state });
+  }
+  return Object.freeze({
+    points: metrics.points,
+    rankingPoints: Object.freeze(rankingPoints),
+  });
+}
+
+function metricsEqual(first: MatchMetrics, second: MutableMatchMetrics): boolean {
+  if (first.points !== second.points) return false;
+  const firstIds = Object.keys(first.rankingPoints);
+  const secondIds = Object.keys(second.rankingPoints);
+  if (firstIds.length !== secondIds.length) return false;
+  return firstIds.every((id) => {
+    const firstState = first.rankingPoints[id];
+    const secondState = second.rankingPoints[id];
+    return firstState?.progress === secondState?.progress && firstState?.earned === secondState?.earned;
+  });
+}
+
 function cloneSummary(action: ValidatedAction): ActionSummary {
   return Object.freeze({ actionId: action.actionId, parameters: structuredClone(action.parameters) });
 }
 
 export class SimulationEngine {
   readonly #game: GameDefinition;
+  readonly #rankingPointDefinitions: readonly Required<RankingPointDefinition>[];
   readonly #timing: MatchTiming;
   readonly #tickSeconds: number;
   readonly #random: () => number;
   readonly #definitions = new Map<string, ActionDefinition<unknown, unknown>>();
   readonly #enabledActionIds = new Set<string>([DRIVE_ACTION_ID]);
   readonly #robot: MutableRobotState;
+  readonly #metrics: MutableMatchMetrics;
   readonly #recordPlayback: boolean;
   readonly #frames: PlaybackFrame[] = [];
   readonly #events: ActionEvent[] = [];
@@ -203,6 +258,7 @@ export class SimulationEngine {
   constructor(game: GameDefinition, robotConfiguration: RobotConfiguration, options: SimulationOptions = {}) {
     validateGame(game);
     this.#game = game;
+    this.#rankingPointDefinitions = normalizeRankingPointDefinitions(game.rankingPoints);
     this.#timing = game.timing ?? DEFAULT_MATCH_TIMING;
     finitePositive(this.#timing.durationSeconds, "Match duration");
     if (!Number.isFinite(this.#timing.endgameDurationSeconds)
@@ -214,6 +270,12 @@ export class SimulationEngine {
     this.#random = createSeededRandom(options.seed ?? 1);
     this.#recordPlayback = options.recordPlayback ?? false;
     this.#robot = validateRobot(robotConfiguration, game);
+    this.#metrics = {
+      points: 0,
+      rankingPoints: Object.fromEntries(
+        this.#rankingPointDefinitions.map((definition) => [definition.id, { progress: 0, earned: false }]),
+      ),
+    };
 
     for (const definition of game.actions ?? []) {
       if (definition.metadata.id.length === 0) throw new Error("Action IDs cannot be empty.");
@@ -482,8 +544,13 @@ export class SimulationEngine {
       throw new Error(`Action "${action.actionId}" returned an invalid consumed duration.`);
     }
     action.runtimeState = result.state;
+    this.#validateMetricsDelta(result, action.actionId);
+    const nextInventory = result.inventoryDelta
+      ? this.#inventoryAfterDelta(result.inventoryDelta, action.actionId)
+      : null;
+    this.#applyMetricsDelta(result, action.actionId, this.#elapsedSeconds + result.consumedSeconds);
     if (result.inventoryDelta) {
-      this.#applyInventoryDelta(result.inventoryDelta, action.actionId);
+      this.#robot.inventory = nextInventory!;
       this.#events.push({
         type: "inventory-changed",
         actionId: action.actionId,
@@ -502,7 +569,7 @@ export class SimulationEngine {
     return result.consumedSeconds;
   }
 
-  #applyInventoryDelta(delta: Readonly<Record<string, number>>, actionId: string): void {
+  #inventoryAfterDelta(delta: Readonly<Record<string, number>>, actionId: string): Record<string, number> {
     const result = { ...this.#robot.inventory };
     for (const [objectType, change] of Object.entries(delta)) {
       if (!this.#game.gameObjectTypes.includes(objectType)) {
@@ -517,7 +584,62 @@ export class SimulationEngine {
     if (Object.values(result).reduce((sum, count) => sum + count, 0) > this.#robot.totalGameObjectCapacity) {
       throw new Error(`Action "${actionId}" exceeded total game-object capacity.`);
     }
-    this.#robot.inventory = result;
+    return result;
+  }
+
+  #validateMetricsDelta(
+    result: { readonly pointsDelta?: number; readonly rankingPointProgressDelta?: Readonly<Record<string, number>> },
+    actionId: string,
+  ): void {
+    if (result.pointsDelta !== undefined) {
+      if (!Number.isFinite(result.pointsDelta)) {
+        throw new Error(`Action "${actionId}" returned a non-finite points delta.`);
+      }
+      if (!Number.isFinite(this.#metrics.points + result.pointsDelta)) {
+        throw new Error(`Action "${actionId}" produced invalid cumulative points.`);
+      }
+    }
+    for (const [rankingPointId, change] of Object.entries(result.rankingPointProgressDelta ?? {})) {
+      if (!Object.hasOwn(this.#metrics.rankingPoints, rankingPointId)) {
+        throw new Error(`Action "${actionId}" changed unknown ranking-point ID "${rankingPointId}".`);
+      }
+      if (!Number.isFinite(change)) {
+        throw new Error(`Action "${actionId}" returned a non-finite ranking-point progress delta for "${rankingPointId}".`);
+      }
+    }
+  }
+
+  #applyMetricsDelta(
+    result: { readonly pointsDelta?: number; readonly rankingPointProgressDelta?: Readonly<Record<string, number>> },
+    actionId: string,
+    timeSeconds: number,
+  ): void {
+    const rankingPointDeltas = Object.entries(result.rankingPointProgressDelta ?? {});
+
+    if (result.pointsDelta !== undefined) {
+      this.#metrics.points += result.pointsDelta;
+      if (result.pointsDelta !== 0) {
+        this.#events.push({
+          type: "points-changed",
+          actionId,
+          timeSeconds,
+          details: { delta: result.pointsDelta, points: this.#metrics.points },
+        });
+      }
+    }
+    for (const [rankingPointId, change] of rankingPointDeltas) {
+      const previous = this.#metrics.rankingPoints[rankingPointId]!;
+      const progress = Math.min(1, Math.max(0, previous.progress + change));
+      const earned = progress >= 1;
+      if (progress === previous.progress && earned === previous.earned) continue;
+      this.#metrics.rankingPoints[rankingPointId] = { progress, earned };
+      this.#events.push({
+        type: "ranking-point-progress-changed",
+        actionId,
+        timeSeconds,
+        details: { rankingPointId, delta: change, progress, earned },
+      });
+    }
   }
 
   #completeActiveAction(consumedSeconds: number): void {
@@ -539,6 +661,7 @@ export class SimulationEngine {
     const robot = cloneRobot(this.#robot);
     return {
       robot,
+      metrics: cloneMetrics(this.#metrics),
       zones: this.#game.zones,
       elapsedSeconds: this.#elapsedSeconds,
       random: this.#random,
@@ -571,6 +694,7 @@ export class SimulationEngine {
       timeRemainingSeconds: Math.max(0, this.#timing.durationSeconds - this.#elapsedSeconds),
       endgameActive: this.#elapsedSeconds >= this.#timing.durationSeconds - this.#timing.endgameDurationSeconds,
       robot: cloneRobot(this.#robot),
+      metrics: cloneMetrics(this.#metrics),
       activeAction: this.#active ? cloneSummary(this.#active) : null,
       queuedActions: Object.freeze(this.#queue.map(cloneSummary)),
       enabledActions: Object.freeze(enabledActions.map((metadata) => Object.freeze({ ...metadata }))),
@@ -587,12 +711,19 @@ export class SimulationEngine {
     if (!this.#recordPlayback) return null;
     const frames = structuredClone(this.#frames);
     const lastFrame = frames.at(-1);
-    if (lastFrame?.timeSeconds !== this.#elapsedSeconds || lastFrame.status !== this.#status) {
-      frames.push({ timeSeconds: this.#elapsedSeconds, robot: cloneRobot(this.#robot), status: this.#status });
+    if (lastFrame?.timeSeconds !== this.#elapsedSeconds || lastFrame.status !== this.#status
+        || !metricsEqual(lastFrame.metrics, this.#metrics)) {
+      frames.push({
+        timeSeconds: this.#elapsedSeconds,
+        robot: cloneRobot(this.#robot),
+        metrics: cloneMetrics(this.#metrics),
+        status: this.#status,
+      });
     }
     return deepFreeze({
       timing: structuredClone(this.#timing),
       zones: structuredClone(this.#game.zones),
+      rankingPointDefinitions: structuredClone(this.#rankingPointDefinitions),
       frames,
       events: structuredClone(this.#events),
     });
@@ -600,8 +731,14 @@ export class SimulationEngine {
 
   #recordFrame(): void {
     const previous = this.#frames.at(-1);
-    if (previous?.timeSeconds === this.#elapsedSeconds && previous.status === this.#status) return;
-    this.#frames.push({ timeSeconds: this.#elapsedSeconds, robot: cloneRobot(this.#robot), status: this.#status });
+    if (previous?.timeSeconds === this.#elapsedSeconds && previous.status === this.#status
+        && metricsEqual(previous.metrics, this.#metrics)) return;
+    this.#frames.push({
+      timeSeconds: this.#elapsedSeconds,
+      robot: cloneRobot(this.#robot),
+      metrics: cloneMetrics(this.#metrics),
+      status: this.#status,
+    });
   }
 }
 

@@ -34,7 +34,7 @@ function applyTheme(theme: Theme) {
 }
 
 export function ThemeProvider({ children }: { children: ReactNode }) {
-  const [theme, setThemeState] = useState<Theme>("system");
+  const [theme, setThemeState] = useState<Theme>("dark");
 
   useEffect(() => {
     let storedTheme: string | null = null;
@@ -44,7 +44,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     } catch {
       // System preference remains available when storage is blocked.
     }
-    const initialTheme = isTheme(storedTheme) ? storedTheme : "system";
+    const initialTheme = isTheme(storedTheme) ? storedTheme : "dark";
 
     setThemeState(initialTheme);
     applyTheme(initialTheme);
@@ -95,7 +95,9 @@ export const themeBootstrapScript = `
   (() => {
     try {
       const stored = localStorage.getItem("${STORAGE_KEY}");
-      const theme = stored === "light" || stored === "dark" ? stored : "system";
+      const theme = stored === "light" || stored === "dark" || stored === "system"
+        ? stored
+        : "dark";
       const isDark = theme === "dark" ||
         (theme === "system" && matchMedia("${DARK_MEDIA_QUERY}").matches);
       document.documentElement.classList.toggle("dark", isDark);

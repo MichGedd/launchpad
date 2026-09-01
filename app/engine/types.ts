@@ -72,6 +72,26 @@ export interface RobotState {
   readonly spinSpeedRotationsPerSecond: number;
 }
 
+/** A ranking point that can be earned by satisfying a season-defined condition. */
+export interface RankingPointDefinition {
+  readonly id: string;
+  readonly label: string;
+  /** Point value used when this ranking point is earned. Defaults to one. */
+  readonly value?: number;
+}
+
+/** Runtime progress for one ranking point. Progress is normalized to [0, 1]. */
+export interface RankingPointState {
+  readonly progress: number;
+  readonly earned: boolean;
+}
+
+/** Cumulative scoring state at a simulation timestamp. */
+export interface MatchMetrics {
+  readonly points: number;
+  readonly rankingPoints: Readonly<Record<string, RankingPointState>>;
+}
+
 export interface ActionRequest {
   readonly actionId: string;
   readonly parameters: unknown;
@@ -99,6 +119,7 @@ export interface ActionEvent {
 
 export interface ActionContext {
   readonly robot: RobotState;
+  readonly metrics: MatchMetrics;
   readonly zones: readonly Zone[];
   readonly elapsedSeconds: number;
   readonly random: () => number;
@@ -118,6 +139,8 @@ export interface ActionAdvanceResult<RuntimeState> {
   readonly consumedSeconds: number;
   readonly complete: boolean;
   readonly inventoryDelta?: Readonly<Record<string, number>>;
+  readonly pointsDelta?: number;
+  readonly rankingPointProgressDelta?: Readonly<Record<string, number>>;
   readonly events?: readonly Omit<ActionEvent, "actionId" | "timeSeconds">[];
 }
 
@@ -139,6 +162,7 @@ export interface GameDefinition {
   readonly zones: readonly Zone[];
   readonly actions?: readonly ActionDefinition[];
   readonly robotFeatures?: readonly RobotFeature[];
+  readonly rankingPoints?: readonly RankingPointDefinition[];
 }
 
 export type SimulationStatus = "running" | "awaiting-actions" | "blocked" | "complete";
@@ -161,6 +185,7 @@ export interface DecisionState {
   readonly timeRemainingSeconds: number;
   readonly endgameActive: boolean;
   readonly robot: RobotState;
+  readonly metrics: MatchMetrics;
   readonly activeAction: ActionSummary | null;
   readonly queuedActions: readonly ActionSummary[];
   readonly enabledActions: readonly ActionMetadata[];
@@ -175,12 +200,14 @@ export interface DecisionState {
 export interface PlaybackFrame {
   readonly timeSeconds: number;
   readonly robot: RobotState;
+  readonly metrics: MatchMetrics;
   readonly status: SimulationStatus;
 }
 
 export interface SimulationPlayback {
   readonly timing: MatchTiming;
   readonly zones: readonly Zone[];
+  readonly rankingPointDefinitions: readonly Required<RankingPointDefinition>[];
   readonly frames: readonly PlaybackFrame[];
   readonly events: readonly ActionEvent[];
 }

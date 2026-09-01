@@ -1,0 +1,173 @@
+import type { PlaybackFrame, VisualizerScene } from "~/visualizer";
+
+import { SimulationTelemetry } from "./simulation-telemetry";
+
+interface FieldViewportProps {
+  readonly frame: PlaybackFrame | null;
+  readonly scene: VisualizerScene | null;
+}
+
+function pointsForPolygon(
+  vertices: readonly { readonly xFeet: number; readonly yFeet: number }[],
+  fieldHeightFeet: number,
+) {
+  return vertices
+    .map(({ xFeet, yFeet }) => `${xFeet},${fieldHeightFeet - yFeet}`)
+    .join(" ");
+}
+
+function FieldViewport({ frame, scene }: FieldViewportProps) {
+  const field = scene?.field ?? { widthFeet: 54, heightFeet: 27 };
+
+  return (
+    <div
+      aria-label="Simulation field"
+      className="relative size-full overflow-hidden rounded-[26px] border border-white/12 bg-[#666b6e] shadow-[inset_0_1px_0_rgb(255_255_255/0.16),0_28px_70px_rgb(0_0_0/0.22)]"
+      role="region"
+    >
+      <svg
+        aria-label={field.backgroundImage?.altText ?? "Robot position and field zones"}
+        className="size-full"
+        preserveAspectRatio="xMidYMid meet"
+        role="img"
+        viewBox={`0 0 ${field.widthFeet} ${field.heightFeet}`}
+      >
+        <defs>
+          <pattern
+            id="field-grid"
+            width="3"
+            height="3"
+            patternUnits="userSpaceOnUse"
+          >
+            <path
+              d="M 3 0 L 0 0 0 3"
+              fill="none"
+              stroke="rgba(255,255,255,0.07)"
+              strokeWidth="0.06"
+            />
+          </pattern>
+          <filter id="robot-shadow" x="-80%" y="-80%" width="260%" height="260%">
+            <feDropShadow dx="0" dy="0.35" floodColor="#08133a" floodOpacity="0.45" stdDeviation="0.5" />
+          </filter>
+        </defs>
+
+        <rect fill="#72777a" height={field.heightFeet} width={field.widthFeet} />
+        {field.backgroundImage ? (
+          <image
+            height={field.heightFeet}
+            href={field.backgroundImage.source}
+            preserveAspectRatio="xMidYMid slice"
+            width={field.widthFeet}
+          />
+        ) : null}
+        <rect fill="url(#field-grid)" height={field.heightFeet} width={field.widthFeet} />
+        <rect
+          fill="none"
+          height={field.heightFeet - 1.2}
+          rx="1"
+          stroke="rgba(255,255,255,0.28)"
+          strokeWidth="0.12"
+          width={field.widthFeet - 1.2}
+          x="0.6"
+          y="0.6"
+        />
+        <line
+          stroke="rgba(255,255,255,0.18)"
+          strokeDasharray="0.35 0.35"
+          strokeWidth="0.1"
+          x1={field.widthFeet / 2}
+          x2={field.widthFeet / 2}
+          y1="0.8"
+          y2={field.heightFeet - 0.8}
+        />
+
+        {scene?.playback.zones.map((zone) => {
+          const className =
+            zone.kind === "score"
+              ? "fill-[#f7931e]/18 stroke-[#f7931e]"
+              : zone.kind === "pickup"
+                ? "fill-[#21409a]/24 stroke-[#6e8ce1]"
+                : "fill-red-950/30 stroke-red-300/70";
+          const shape = zone.shape;
+
+          if (shape.type === "circle") {
+            return (
+              <circle
+                className={className}
+                cx={shape.center.xFeet}
+                cy={field.heightFeet - shape.center.yFeet}
+                key={zone.id}
+                r={shape.radiusFeet}
+                strokeDasharray="0.35 0.2"
+                strokeWidth="0.14"
+              />
+            );
+          }
+
+          if (shape.type === "rectangle") {
+            return (
+              <rect
+                className={className}
+                height={shape.heightFeet}
+                key={zone.id}
+                rx="0.45"
+                strokeDasharray="0.35 0.2"
+                strokeWidth="0.14"
+                transform={`rotate(${-((shape.headingRotations ?? 0) * 360)} ${shape.center.xFeet} ${field.heightFeet - shape.center.yFeet})`}
+                width={shape.widthFeet}
+                x={shape.center.xFeet - shape.widthFeet / 2}
+                y={field.heightFeet - shape.center.yFeet - shape.heightFeet / 2}
+              />
+            );
+          }
+
+          return (
+            <polygon
+              className={className}
+              key={zone.id}
+              points={pointsForPolygon(shape.vertices, field.heightFeet)}
+              strokeDasharray="0.35 0.2"
+              strokeWidth="0.14"
+            />
+          );
+        })}
+
+        {frame ? (
+          <g
+            filter="url(#robot-shadow)"
+            transform={`translate(${frame.robot.pose.xFeet} ${field.heightFeet - frame.robot.pose.yFeet}) rotate(${-frame.robot.pose.headingRotations * 360})`}
+          >
+            <rect
+              fill="#21409a"
+              height={frame.robot.lengthFeet}
+              rx="0.5"
+              stroke="rgba(255,255,255,0.9)"
+              strokeWidth="0.16"
+              width={frame.robot.widthFeet}
+              x={-frame.robot.widthFeet / 2}
+              y={-frame.robot.lengthFeet / 2}
+            />
+            <path
+              d={`M 0 0 L ${frame.robot.widthFeet * 0.75} 0`}
+              stroke="#f7931e"
+              strokeLinecap="round"
+              strokeWidth="0.24"
+            />
+            <circle fill="white" r="0.18" />
+          </g>
+        ) : null}
+      </svg>
+
+      <div className="pointer-events-none absolute left-5 top-5 rounded-xl border border-white/12 bg-black/25 px-3 py-2 text-[11px] font-medium uppercase tracking-[0.16em] text-white/70 backdrop-blur-xl">
+        Neutral field · {field.widthFeet} × {field.heightFeet} ft
+      </div>
+      <SimulationTelemetry
+        definitions={scene?.playback.rankingPointDefinitions ?? []}
+        metrics={frame?.metrics ?? null}
+        robot={frame?.robot ?? null}
+      />
+    </div>
+  );
+}
+
+export { FieldViewport };

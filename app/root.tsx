@@ -20,7 +20,7 @@ export function meta({}: Route.MetaArgs) {
     { title: "Launchpad" },
     {
       name: "description",
-      content: "A ready-to-build React Router application foundation.",
+      content: "Explore FRC robot strategies with a fast, interactive replay visualizer.",
     },
   ];
 }
