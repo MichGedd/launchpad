@@ -1,9 +1,11 @@
 export {
+  DEFAULT_ROBOT_CUSTOMIZATION,
   DEFAULT_ROBOT_FEATURE_OPTIONS,
   type FieldBackgroundImage,
   type FieldPresentation,
   type ReplayGenerationRequest,
   type ReplayGenerator,
+  type RobotCustomization,
   type RobotFeatureOption,
   type VisualizerScene,
 } from "./types.ts";

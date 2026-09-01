@@ -43,8 +43,9 @@ function DialogContent({
   className,
   children,
   showCloseButton = true,
+  closeLabel = "Close dialog",
   ...props
-}: DialogPrimitive.Popup.Props & { showCloseButton?: boolean }) {
+}: DialogPrimitive.Popup.Props & { showCloseButton?: boolean; closeLabel?: string }) {
   return (
     <DialogPrimitive.Portal>
       <DialogPrimitive.Backdrop className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm transition-opacity duration-200 data-closed:opacity-0 data-open:opacity-100" />
@@ -60,7 +61,7 @@ function DialogContent({
           {children}
           {showCloseButton ? (
             <DialogPrimitive.Close
-              aria-label="Close replay details"
+              aria-label={closeLabel}
               className="glass-control absolute right-5 top-5 grid size-9 place-items-center rounded-xl text-muted-foreground transition-colors hover:text-foreground"
             >
               <XIcon aria-hidden="true" className="size-4" />

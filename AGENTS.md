@@ -118,7 +118,7 @@ needed.
 
 ## Model Routing and Subagent Strategy
 
-Use the cheapest model that can reliably perform each part of the task. Prefer separating high-judgment planning from well-specified execution.
+Use the cheapest model that can reliably perform each part of the task. Prefer separating high-judgment planning from well-specified execution. When generating sub-agents, append the model and reasoning to the agent name.
 
 ### Default Workflow
 

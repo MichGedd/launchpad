@@ -5,6 +5,7 @@ import {
   calculateEarnedRankingPoints,
   clampPlaybackTime,
   createDemoReplay,
+  DEFAULT_ROBOT_CUSTOMIZATION,
   getPlaybackFrameAtTime,
   interpolatePlaybackFrame,
   isPlaybackComplete,
@@ -127,11 +128,12 @@ describe("deterministic demo replay generator", () => {
   const request: ReplayGenerationRequest = {
     strategy: "Drive to the far side, then return to the start zone.",
     selectedFeatureIds: ["drive-planning"],
+    robotCustomization: DEFAULT_ROBOT_CUSTOMIZATION,
   };
 
   test("rejects an empty strategy with an actionable error", async () => {
     await assert.rejects(
-      createDemoReplay({ strategy: "  ", selectedFeatureIds: [] }),
+      createDemoReplay({ strategy: "  ", selectedFeatureIds: [], robotCustomization: DEFAULT_ROBOT_CUSTOMIZATION }),
       /Enter a strategy before generating a replay/,
     );
   });
@@ -158,5 +160,50 @@ describe("deterministic demo replay generator", () => {
     assert.equal(first.playback.frames.at(-1)!.metrics.points, 12);
     assert.equal(first.playback.frames.at(-1)!.status, "complete");
     assert.equal(first.playback.frames.at(-1)!.timeSeconds, first.playback.timing.durationSeconds);
+  });
+
+  test("applies custom dimensions and speeds to every generated frame", async () => {
+    const customization = {
+      widthFeet: 3,
+      lengthFeet: 2,
+      translationSpeedFeetPerSecond: 6,
+      spinSpeedRotationsPerSecond: 0.5,
+    } as const;
+    const scene = await createDemoReplay({ ...request, robotCustomization: customization });
+    for (const frame of scene.playback.frames) {
+      assert.equal(frame.robot.widthFeet, customization.widthFeet);
+      assert.equal(frame.robot.lengthFeet, customization.lengthFeet);
+      assert.equal(frame.robot.translationSpeedFeetPerSecond, customization.translationSpeedFeetPerSecond);
+      assert.equal(frame.robot.spinSpeedRotationsPerSecond, customization.spinSpeedRotationsPerSecond);
+    }
+  });
+
+  test("derives waypoint and event timing from the configured motion limits", async () => {
+    const customization = {
+      ...DEFAULT_ROBOT_CUSTOMIZATION,
+      translationSpeedFeetPerSecond: 5,
+      spinSpeedRotationsPerSecond: 0.5,
+    } as const;
+    const scene = await createDemoReplay({ ...request, robotCustomization: customization });
+    const frames = scene.playback.frames;
+    const expectedSecondSegment = Math.max(13 / 5, 0.25 / 0.5);
+    assert.equal(frames[1].timeSeconds, 13 / 5);
+    assert.equal(frames[2].timeSeconds, 13 / 5 + expectedSecondSegment);
+    assert.equal(scene.playback.events[1].timeSeconds, frames[2].timeSeconds);
+    assert.equal(scene.playback.events.at(-1)!.timeSeconds, scene.playback.timing.durationSeconds);
+
+    const slowTurnScene = await createDemoReplay({
+      ...request,
+      robotCustomization: {
+        ...DEFAULT_ROBOT_CUSTOMIZATION,
+        translationSpeedFeetPerSecond: 100,
+        spinSpeedRotationsPerSecond: 0.1,
+      },
+    });
+    assert.equal(slowTurnScene.playback.frames[2].timeSeconds, 2.5 + 13 / 100);
+    assert.equal(
+      slowTurnScene.playback.frames.at(-1)!.timeSeconds,
+      2.5 + 13 / 100 + 20 / 100 + 3.75,
+    );
   });
 });

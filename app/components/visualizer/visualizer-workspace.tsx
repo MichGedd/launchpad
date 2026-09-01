@@ -10,6 +10,7 @@ import {
   PlayIcon,
   RotateCcwIcon,
   RocketIcon,
+  Settings2Icon,
   SparklesIcon,
 } from "lucide-react";
 import {
@@ -27,13 +28,16 @@ import {
   clampPlaybackTime,
   interpolatePlaybackFrame,
   isPlaybackComplete,
+  DEFAULT_ROBOT_CUSTOMIZATION,
   type ReplayGenerator,
+  type RobotCustomization,
   type RobotFeatureOption,
   type VisualizerScene,
 } from "~/visualizer";
 
 import { FieldViewport } from "./field-viewport";
 import { ReplayDetails } from "./replay-details";
+import { RobotCustomizationDialog } from "./robot-customization-dialog";
 
 const PLAYBACK_SPEEDS = [0.5, 1, 2] as const;
 
@@ -58,6 +62,9 @@ function VisualizerWorkspace({
   const [selectedFeatureIds, setSelectedFeatureIds] = useState<readonly string[]>(
     features.map((feature) => feature.id),
   );
+  const [robotCustomization, setRobotCustomization] = useState<RobotCustomization>(
+    DEFAULT_ROBOT_CUSTOMIZATION,
+  );
   const [scene, setScene] = useState<VisualizerScene | null>(null);
   const [currentTimeSeconds, setCurrentTimeSeconds] = useState(0);
   const [playbackSpeed, setPlaybackSpeed] = useState<(typeof PLAYBACK_SPEEDS)[number]>(1);
@@ -65,6 +72,7 @@ function VisualizerWorkspace({
   const [isGenerating, setIsGenerating] = useState(false);
   const [generationError, setGenerationError] = useState<string | null>(null);
   const [isFeatureRailCollapsed, setIsFeatureRailCollapsed] = useState(false);
+  const [isRobotCustomizationOpen, setIsRobotCustomizationOpen] = useState(false);
   const [isTimelinePinned, setIsTimelinePinned] = useState(false);
   const initialized = useRef(false);
 
@@ -74,7 +82,7 @@ function VisualizerWorkspace({
     setIsPlaying(false);
 
     try {
-      const nextScene = await generateReplay({ strategy, selectedFeatureIds });
+      const nextScene = await generateReplay({ strategy, selectedFeatureIds, robotCustomization });
       setScene(nextScene);
       setCurrentTimeSeconds(0);
     } catch (error) {
@@ -213,7 +221,7 @@ function VisualizerWorkspace({
 
         <div className="flex min-h-0 flex-1 gap-4">
           <aside
-            className={`glass-panel relative shrink-0 overflow-y-auto overflow-x-hidden rounded-[24px] transition-[width] duration-200 ${isFeatureRailCollapsed ? "w-[72px]" : "w-[272px]"}`}
+            className={`glass-panel relative flex shrink-0 flex-col overflow-hidden rounded-[24px] transition-[width] duration-200 ${isFeatureRailCollapsed ? "w-[72px]" : "w-[272px]"}`}
           >
             <div className="flex items-center justify-between border-b border-white/10 p-4 [@media(max-height:600px)]:p-3">
               {isFeatureRailCollapsed ? null : (
@@ -234,7 +242,7 @@ function VisualizerWorkspace({
               </Button>
             </div>
 
-            <div className="space-y-2 p-3 [@media(max-height:600px)]:space-y-1 [@media(max-height:600px)]:p-2">
+            <div className="min-h-0 flex-1 space-y-2 overflow-y-auto p-3 [@media(max-height:600px)]:space-y-1 [@media(max-height:600px)]:p-2">
               {features.map((feature) => {
                 const isSelected = selectedFeatureIds.includes(feature.id);
                 return (
@@ -263,6 +271,35 @@ function VisualizerWorkspace({
                 );
               })}
             </div>
+
+            <Dialog
+              onOpenChange={(open) => setIsRobotCustomizationOpen(open)}
+              open={isRobotCustomizationOpen}
+            >
+              <div className="shrink-0 border-t border-white/10 p-3 [@media(max-height:600px)]:p-2">
+                <DialogTrigger
+                  render={
+                    <Button
+                      aria-label="Customize Robot"
+                      className={`w-full rounded-xl ${isFeatureRailCollapsed ? "px-0" : "justify-start"}`}
+                      size={isFeatureRailCollapsed ? "icon" : "default"}
+                      title={isFeatureRailCollapsed ? "Customize Robot" : undefined}
+                      type="button"
+                      variant="ghost"
+                    />
+                  }
+                >
+                  <Settings2Icon aria-hidden="true" />
+                  {isFeatureRailCollapsed ? null : "Customize Robot"}
+                </DialogTrigger>
+              </div>
+              <RobotCustomizationDialog
+                customization={robotCustomization}
+                onOpenChange={setIsRobotCustomizationOpen}
+                onSave={setRobotCustomization}
+                open={isRobotCustomizationOpen}
+              />
+            </Dialog>
           </aside>
 
           <section className="glass-panel relative min-w-0 flex-1 rounded-[28px] p-3" aria-label="Replay workspace">

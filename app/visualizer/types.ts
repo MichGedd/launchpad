@@ -20,6 +20,21 @@ export interface RobotFeatureOption {
   readonly description: string;
 }
 
+/** Season-independent dimensions and motion limits used by a visualizer replay. */
+export interface RobotCustomization {
+  readonly widthFeet: number;
+  readonly lengthFeet: number;
+  readonly translationSpeedFeetPerSecond: number;
+  readonly spinSpeedRotationsPerSecond: number;
+}
+
+export const DEFAULT_ROBOT_CUSTOMIZATION: RobotCustomization = Object.freeze({
+  widthFeet: 28.5 / 12,
+  lengthFeet: 28.5 / 12,
+  translationSpeedFeetPerSecond: 15,
+  spinSpeedRotationsPerSecond: 1,
+});
+
 /** All data needed to render one replay in the visualizer. */
 export interface VisualizerScene {
   readonly playback: SimulationPlayback;
@@ -30,6 +45,7 @@ export interface VisualizerScene {
 export interface ReplayGenerationRequest {
   readonly strategy: string;
   readonly selectedFeatureIds: readonly string[];
+  readonly robotCustomization: RobotCustomization;
 }
 
 /** Async boundary between the UI and an LLM or another replay-producing controller. */
