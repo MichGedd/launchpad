@@ -25,4 +25,9 @@ export {
   simulationGenerationRequestSchema,
   type SimulationGenerationRequest,
 } from "./schemas.ts";
+export {
+  simulationGenerationInputFingerprint,
+  type SimulationGenerationInputs,
+  type SimulationLlmConfiguration,
+} from "./generation-inputs.ts";
 export type { SimulationGenerationResponse } from "./api.ts";

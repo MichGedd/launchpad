@@ -157,6 +157,11 @@
   }
 }
 
+.generate-button-stale {
+  border-color: rgb(255 211 155 / 78%);
+  box-shadow: 0 0 0 3px rgb(247 147 30 / 32%), 0 12px 26px rgb(67 31 0 / 32%);
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

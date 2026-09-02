@@ -35,6 +35,11 @@ import {
   type VisualizerScene,
 } from "~/visualizer";
 import { clearStoredNavGrid, loadStoredNavGrid, storeNavGrid } from "~/visualizer/navgrid";
+import {
+  simulationGenerationInputFingerprint,
+  type SimulationDebugTrace,
+  type SimulationGenerationInputs,
+} from "~/simulation";
 
 import { FieldViewport } from "./field-viewport";
 import { ReplayDetails } from "./replay-details";
@@ -53,7 +58,6 @@ import {
   type LlmConfigurationStatus,
   type LlmStatistics,
 } from "~/llm/client";
-import type { SimulationDebugTrace } from "~/simulation";
 
 const PLAYBACK_SPEEDS = [0.5, 1, 2] as const;
 
@@ -104,6 +108,27 @@ function VisualizerWorkspace({
   const [debugTrace, setDebugTrace] = useState<readonly SimulationDebugTrace[]>([]);
   const [isDebugTraceOpen, setIsDebugTraceOpen] = useState(false);
   const [isTimelinePinned, setIsTimelinePinned] = useState(false);
+  const simulationInputs = useMemo<SimulationGenerationInputs>(
+    () => ({
+      request: {
+        strategy,
+        selectedFeatureIds,
+        robotCustomization,
+        navGrid: activeNavGrid,
+      },
+      llmConfiguration,
+    }),
+    [activeNavGrid, llmConfiguration, robotCustomization, selectedFeatureIds, strategy],
+  );
+  const currentInputFingerprint = useMemo(
+    () => simulationGenerationInputFingerprint(simulationInputs),
+    [simulationInputs],
+  );
+  const [lastGeneratedInputFingerprint, setLastGeneratedInputFingerprint] = useState<string | null>(null);
+  const simulationNeedsGeneration =
+    scene === null
+    || lastGeneratedInputFingerprint === null
+    || lastGeneratedInputFingerprint !== currentInputFingerprint;
 
   async function handleGenerate() {
     if (!llmConfiguration?.configured || isGenerating) return;
@@ -113,14 +138,10 @@ function VisualizerWorkspace({
     setDebugTrace([]);
 
     try {
-      const response = await generateSimulation({
-        strategy,
-        selectedFeatureIds,
-        robotCustomization,
-        navGrid: activeNavGrid,
-      });
+      const response = await generateSimulation(simulationInputs.request);
       setScene(response.scene);
       setCurrentTimeSeconds(0);
+      setLastGeneratedInputFingerprint(currentInputFingerprint);
       if (response.statistics) setStatistics(response.statistics);
       setDebugTrace(response.debugTrace ?? []);
     } catch (error) {
@@ -308,7 +329,8 @@ function VisualizerWorkspace({
                 Report Statistics
               </Button>
               <Button
-                className="h-10 rounded-xl px-4 text-sm shadow-lg shadow-orange-950/20"
+                aria-label={simulationNeedsGeneration ? "Generate updated simulation" : "Generate simulation"}
+                className={`h-10 rounded-xl px-4 text-sm shadow-lg shadow-orange-950/20 ${simulationNeedsGeneration ? "generate-button-stale" : ""}`}
                 disabled={llmConfiguration === null || !llmConfiguration.configured || isGenerating}
                 type="submit"
               >
