@@ -403,14 +403,22 @@ function VisualizerWorkspace({
                 open={isRobotCustomizationOpen}
               />
             </Dialog>
+          </aside>
+
+          <section className="glass-panel relative min-w-0 flex-1 rounded-[28px] p-3" aria-label="Replay workspace">
+            <FieldViewport
+              frame={frame}
+              isGenerating={isGenerating}
+              preview={preview}
+              scene={scene}
+            />
+
             <Dialog onOpenChange={setIsFieldEditorOpen} open={isFieldEditorOpen}>
               <DialogTrigger
                 render={
                   <Button
                     aria-label="Open field editor"
-                    className={`w-full rounded-xl ${isFeatureRailCollapsed ? "px-0" : "justify-start"}`}
-                    size={isFeatureRailCollapsed ? "icon" : "default"}
-                    title={isFeatureRailCollapsed ? "Field editor" : undefined}
+                    className="glass-control absolute left-8 top-[76px] z-20 h-9 rounded-xl bg-black/25 px-3 text-xs text-white/80 backdrop-blur-xl hover:bg-black/45 hover:text-white"
                     disabled={isGenerating}
                     type="button"
                     variant="ghost"
@@ -418,7 +426,7 @@ function VisualizerWorkspace({
                 }
               >
                 <MapIcon aria-hidden="true" />
-                {isFeatureRailCollapsed ? null : "Field editor"}
+                Field editor
               </DialogTrigger>
               <FieldEditorDialog
                 backgroundImage={preview.field.backgroundImage}
@@ -440,15 +448,6 @@ function VisualizerWorkspace({
                 selectedFeatureIds={selectedFeatureIds}
               />
             </Dialog>
-          </aside>
-
-          <section className="glass-panel relative min-w-0 flex-1 rounded-[28px] p-3" aria-label="Replay workspace">
-            <FieldViewport
-              frame={frame}
-              isGenerating={isGenerating}
-              preview={preview}
-              scene={scene}
-            />
 
             <div
               className="group/timeline absolute inset-x-3 bottom-3 z-20 h-24"
@@ -564,25 +563,27 @@ function VisualizerWorkspace({
         </div>
       </div>
 
-      {import.meta.env.DEV ? (
-        <Dialog onOpenChange={setIsDebugTraceOpen} open={isDebugTraceOpen}>
-          <DialogTrigger
-            render={
-              <Button
-                className="absolute bottom-5 left-5 z-30 rounded-xl bg-black/35 text-xs text-white/80 backdrop-blur-xl hover:bg-black/50"
-                disabled={debugTrace.length === 0 || isGenerating}
-                type="button"
-                variant="ghost"
-              />
-            }
-          >
-            LLM interactions{debugTrace.length > 0 ? ` · ${debugTrace.length}` : ""}
-          </DialogTrigger>
-          <LlmInteractionsDialog traces={debugTrace} />
-        </Dialog>
-      ) : null}
       <Dialog onOpenChange={setIsStatisticsOpen} open={isStatisticsOpen}>
-        <LlmStatisticsDialog statistics={statistics} />
+        <LlmStatisticsDialog
+          footerAction={import.meta.env.DEV ? (
+            <Dialog onOpenChange={setIsDebugTraceOpen} open={isDebugTraceOpen}>
+              <DialogTrigger
+                render={
+                  <Button
+                    className="rounded-xl"
+                    disabled={debugTrace.length === 0 || isGenerating}
+                    type="button"
+                    variant="outline"
+                  />
+                }
+              >
+                LLM interactions{debugTrace.length > 0 ? ` · ${debugTrace.length}` : ""}
+              </DialogTrigger>
+              <LlmInteractionsDialog traces={debugTrace} />
+            </Dialog>
+          ) : undefined}
+          statistics={statistics}
+        />
       </Dialog>
     </main>
   );

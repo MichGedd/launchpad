@@ -1,8 +1,11 @@
+import type { ReactNode } from "react";
+
 import { DialogContent, DialogDescription, DialogHeader, DialogTitle } from "~/components/ui/dialog";
 import type { LlmStatistics } from "~/llm/client";
 import type { TokenStatistics } from "~/llm/schemas";
 
 interface LlmStatisticsDialogProps {
+  readonly footerAction?: ReactNode;
   readonly statistics: LlmStatistics | null;
 }
 
@@ -44,7 +47,7 @@ function StatisticsSection({ heading, statistics }: { readonly heading: string; 
   );
 }
 
-function LlmStatisticsDialog({ statistics }: LlmStatisticsDialogProps) {
+function LlmStatisticsDialog({ footerAction, statistics }: LlmStatisticsDialogProps) {
   return (
     <DialogContent closeLabel="Close report statistics" className="max-w-2xl">
       <DialogHeader>
@@ -57,6 +60,11 @@ function LlmStatisticsDialog({ statistics }: LlmStatisticsDialogProps) {
         <StatisticsSection heading="Latest generation" statistics={statistics?.latestGeneration ?? null} />
         <StatisticsSection heading="Session total" statistics={statistics?.sessionTotal ?? null} />
       </div>
+      {footerAction ? (
+        <div className="mt-5 flex justify-end border-t border-white/10 pt-5">
+          {footerAction}
+        </div>
+      ) : null}
     </DialogContent>
   );
 }

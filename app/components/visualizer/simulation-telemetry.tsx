@@ -42,7 +42,8 @@ function SimulationTelemetry({
   return (
     <aside
       aria-label="Simulation telemetry"
-      className="glass-panel pointer-events-none absolute right-5 top-5 w-60 rounded-[20px] border-white/14 bg-[#202527]/78 p-3 text-white shadow-xl shadow-black/20 [@media(max-height:560px)]:right-3 [@media(max-height:560px)]:top-3 [@media(max-height:560px)]:w-56 [@media(max-height:560px)]:p-2.5"
+      className="glass-panel pointer-events-auto absolute right-5 top-5 w-60 rounded-[20px] border-white/14 bg-[#202527]/78 p-3 text-white opacity-10 shadow-xl shadow-black/20 transition-opacity duration-200 hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#6e8ce1] focus-visible:ring-offset-2 focus-visible:ring-offset-transparent focus-within:opacity-100 motion-reduce:transition-none [@media(max-height:560px)]:right-3 [@media(max-height:560px)]:top-3 [@media(max-height:560px)]:w-56 [@media(max-height:560px)]:p-2.5"
+      tabIndex={0}
     >
       <div className="mb-2 flex items-center gap-2 [@media(max-height:560px)]:mb-1.5">
         <ChartNoAxesCombinedIcon
