@@ -8,6 +8,7 @@ export {
   type RobotCustomization,
   type RobotFeatureOption,
   type VisualizerScene,
+  type VisualizerPreview,
 } from "./types.ts";
 export {
   clampPlaybackTime,

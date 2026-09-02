@@ -5,7 +5,6 @@ import { join } from "node:path";
 
 import {
   llmConfigurationRequestSchema,
-  strategyGenerationRequestSchema,
 } from "../app/llm/schemas.ts";
 import {
   createDevelopmentMockStrategyRunner,
@@ -14,6 +13,12 @@ import {
   StrategyPlanningError,
 } from "../app/llm/service.ts";
 import { SessionStore } from "../app/llm/session.ts";
+import {
+  runSimulationWithLlm,
+  SimulationControllerError,
+  simulationGenerationRequestSchema,
+  type SimulationGenerationResponse,
+} from "../app/simulation/index.ts";
 
 const SESSION_COOKIE = "launchpad_session";
 const BODY_LIMIT = "64kb";
@@ -23,6 +28,8 @@ export interface LaunchpadServerOptions {
   readonly sessionStore?: SessionStore;
   readonly planner?: StrategyPlanner;
   readonly mode?: "api-only" | "production";
+  /** Exact model exchanges are exposed only by an explicitly development server. */
+  readonly exposeDebugTraces?: boolean;
 }
 
 export async function createLaunchpadServer(
@@ -99,32 +106,47 @@ export async function createLaunchpadServer(
     });
   });
 
-  app.post("/api/strategy-plan", requireSameOrigin, async (request, response) => {
+  app.post("/api/simulation", requireSameOrigin, async (request, response) => {
     const sessionId = getOrCreateSessionId(request, response, sessions);
     const configuration = sessions.withConfiguration(sessionId);
     if (!configuration) {
-      response.status(409).json({ error: "Please configure your LLM before generating a strategy plan." });
+      response.status(409).json({ error: "Please configure your LLM before generating a simulation." });
       return;
     }
-    const parsed = strategyGenerationRequestSchema.safeParse(request.body);
+    const parsed = simulationGenerationRequestSchema.safeParse(request.body);
     if (!parsed.success) {
-      response.status(400).json({ error: "Strategy request is invalid." });
+      response.status(400).json({ error: "Simulation request is invalid." });
       return;
     }
     if (!sessions.beginGeneration(sessionId)) {
-      response.status(429).json({ error: "A strategy plan is already being generated." });
+      response.status(429).json({ error: "A simulation is already being generated." });
       return;
     }
     try {
-      const result = await planner.generate(configuration, parsed.data);
-      const statistics = sessions.recordUsage(sessionId, result.usage);
-      response.json({ ...result, ...(statistics ? { statistics } : {}) });
+      const result = await runSimulationWithLlm({
+        planner,
+        configuration,
+        input: parsed.data,
+        includeDebugTraces: options.exposeDebugTraces === true,
+      });
+      for (const usage of result.usages) sessions.recordUsage(sessionId, usage);
+      const statistics = sessions.getStatistics(sessionId);
+      const payload = {
+        scene: result.scene,
+        ...(statistics ? { statistics } : {}),
+        ...(options.exposeDebugTraces === true && result.debugTrace
+          ? { debugTrace: result.debugTrace }
+          : {}),
+      } satisfies SimulationGenerationResponse;
+      response.json(payload);
     } catch (error) {
       if (error instanceof StrategyPlanningError && error.usage) {
         sessions.recordUsage(sessionId, error.usage);
       }
       response.status(502).json({
-        error: error instanceof StrategyPlanningError ? error.message : "The strategy plan could not be generated.",
+        error: error instanceof StrategyPlanningError || error instanceof SimulationControllerError
+          ? error.message
+          : "The simulation could not be generated.",
       });
     } finally {
       sessions.endGeneration(sessionId);
@@ -158,6 +180,7 @@ export async function startLaunchpadServer(port = Number(process.env.PORT ?? 517
   const useDevelopmentMock = process.env.LAUNCHPAD_MOCK_LLM === "1";
   const { app } = await createLaunchpadServer({
     mode: "api-only",
+    exposeDebugTraces: true,
     ...(useDevelopmentMock
       ? {
           planner: new StrategyPlanner({

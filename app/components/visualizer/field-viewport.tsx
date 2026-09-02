@@ -1,9 +1,16 @@
-import type { PlaybackFrame, VisualizerScene } from "~/visualizer";
+import type {
+  PlaybackFrame,
+  VisualizerPreview,
+  VisualizerScene,
+} from "~/visualizer";
+import { LoaderCircleIcon } from "lucide-react";
 
 import { SimulationTelemetry } from "./simulation-telemetry";
 
 interface FieldViewportProps {
   readonly frame: PlaybackFrame | null;
+  readonly isGenerating?: boolean;
+  readonly preview: VisualizerPreview;
   readonly scene: VisualizerScene | null;
 }
 
@@ -16,8 +23,17 @@ function pointsForPolygon(
     .join(" ");
 }
 
-function FieldViewport({ frame, scene }: FieldViewportProps) {
-  const field = scene?.field ?? { widthFeet: 54, heightFeet: 27 };
+function FieldViewport({
+  frame,
+  isGenerating = false,
+  preview,
+  scene,
+}: FieldViewportProps) {
+  const field = scene?.field ?? preview.field;
+  const displayedFrame = scene === null ? preview.initialFrame : frame;
+  const zones = scene?.playback.zones ?? preview.zones;
+  const rankingPointDefinitions =
+    scene?.playback.rankingPointDefinitions ?? preview.rankingPointDefinitions;
 
   return (
     <div
@@ -81,7 +97,7 @@ function FieldViewport({ frame, scene }: FieldViewportProps) {
           y2={field.heightFeet - 0.8}
         />
 
-        {scene?.playback.zones.map((zone) => {
+        {zones.map((zone) => {
           const className =
             zone.kind === "score"
               ? "fill-[#f7931e]/18 stroke-[#f7931e]"
@@ -96,6 +112,7 @@ function FieldViewport({ frame, scene }: FieldViewportProps) {
                 className={className}
                 cx={shape.center.xFeet}
                 cy={field.heightFeet - shape.center.yFeet}
+                data-zone-id={zone.id}
                 key={zone.id}
                 r={shape.radiusFeet}
                 strokeDasharray="0.35 0.2"
@@ -108,6 +125,7 @@ function FieldViewport({ frame, scene }: FieldViewportProps) {
             return (
               <rect
                 className={className}
+                data-zone-id={zone.id}
                 height={shape.heightFeet}
                 key={zone.id}
                 rx="0.45"
@@ -124,6 +142,7 @@ function FieldViewport({ frame, scene }: FieldViewportProps) {
           return (
             <polygon
               className={className}
+              data-zone-id={zone.id}
               key={zone.id}
               points={pointsForPolygon(shape.vertices, field.heightFeet)}
               strokeDasharray="0.35 0.2"
@@ -132,23 +151,24 @@ function FieldViewport({ frame, scene }: FieldViewportProps) {
           );
         })}
 
-        {frame ? (
+        {displayedFrame ? (
           <g
+            data-robot="true"
             filter="url(#robot-shadow)"
-            transform={`translate(${frame.robot.pose.xFeet} ${field.heightFeet - frame.robot.pose.yFeet}) rotate(${-frame.robot.pose.headingRotations * 360})`}
+            transform={`translate(${displayedFrame.robot.pose.xFeet} ${field.heightFeet - displayedFrame.robot.pose.yFeet}) rotate(${-displayedFrame.robot.pose.headingRotations * 360})`}
           >
             <rect
               fill="#21409a"
-              height={frame.robot.lengthFeet}
+              height={displayedFrame.robot.lengthFeet}
               rx="0.5"
               stroke="rgba(255,255,255,0.9)"
               strokeWidth="0.16"
-              width={frame.robot.widthFeet}
-              x={-frame.robot.widthFeet / 2}
-              y={-frame.robot.lengthFeet / 2}
+              width={displayedFrame.robot.widthFeet}
+              x={-displayedFrame.robot.widthFeet / 2}
+              y={-displayedFrame.robot.lengthFeet / 2}
             />
             <path
-              d={`M 0 0 L ${frame.robot.widthFeet * 0.75} 0`}
+              d={`M 0 0 L ${displayedFrame.robot.widthFeet * 0.75} 0`}
               stroke="#f7931e"
               strokeLinecap="round"
               strokeWidth="0.24"
@@ -162,10 +182,24 @@ function FieldViewport({ frame, scene }: FieldViewportProps) {
         Neutral field · {field.widthFeet} × {field.heightFeet} ft
       </div>
       <SimulationTelemetry
-        definitions={scene?.playback.rankingPointDefinitions ?? []}
-        metrics={frame?.metrics ?? null}
-        robot={frame?.robot ?? null}
+        definitions={rankingPointDefinitions}
+        metrics={displayedFrame?.metrics ?? null}
+        robot={displayedFrame?.robot ?? null}
       />
+
+      {isGenerating ? (
+        <div
+          aria-label="Generating simulation"
+          aria-live="polite"
+          className="absolute inset-0 z-30 grid place-items-center rounded-[26px] bg-[#202527]/48 backdrop-blur-[3px]"
+          role="status"
+        >
+          <div className="glass-panel flex items-center gap-3 rounded-2xl px-5 py-4 text-sm font-medium text-white shadow-xl shadow-black/20">
+            <LoaderCircleIcon aria-hidden="true" className="size-5 animate-spin text-[#f7931e]" />
+            Generating simulation…
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

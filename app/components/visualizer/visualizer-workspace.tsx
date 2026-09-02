@@ -17,7 +17,6 @@ import {
 import {
   useEffect,
   useMemo,
-  useRef,
   useState,
 } from "react";
 
@@ -29,9 +28,9 @@ import {
   interpolatePlaybackFrame,
   isPlaybackComplete,
   DEFAULT_ROBOT_CUSTOMIZATION,
-  type ReplayGenerator,
   type RobotCustomization,
   type RobotFeatureOption,
+  type VisualizerPreview,
   type VisualizerScene,
 } from "~/visualizer";
 
@@ -39,43 +38,25 @@ import { FieldViewport } from "./field-viewport";
 import { ReplayDetails } from "./replay-details";
 import { RobotCustomizationDialog } from "./robot-customization-dialog";
 import { LlmConfigurationDialog } from "./llm-configuration-dialog";
+import { LlmInteractionsDialog } from "./llm-interactions-dialog";
 import { LlmStatisticsDialog } from "./llm-statistics-dialog";
-import { StrategyPlanDialog } from "./strategy-plan-dialog";
 import {
   disconnectLlm,
-  generateStrategyPlan,
+  generateSimulation,
   getLlmConfiguration,
   getLlmStatistics,
   saveLlmConfiguration,
   type LlmConfigurationRequest,
   type LlmConfigurationStatus,
   type LlmStatistics,
-  type StrategyPlan,
 } from "~/llm/client";
+import type { SimulationDebugTrace } from "~/simulation";
 
 const PLAYBACK_SPEEDS = [0.5, 1, 2] as const;
-const NEUTRAL_ACTION_METADATA = [
-  {
-    id: "drive-to",
-    description: "Drive to a field pose using xFeet, yFeet, and headingRotations parameters.",
-  },
-  {
-    id: "collect-object",
-    description: "Collect one game object while contacting an eligible pickup zone.",
-    zoneKind: "pickup" as const,
-    zoneTags: ["game-object"],
-  },
-  {
-    id: "score-object",
-    description: "Score one carried game object while contacting an eligible score zone.",
-    zoneKind: "score" as const,
-    zoneTags: ["game-object"],
-  },
-] as const;
 
 interface VisualizerWorkspaceProps {
   readonly features: readonly RobotFeatureOption[];
-  readonly generateReplay: ReplayGenerator;
+  readonly initialPreview: VisualizerPreview;
   readonly initialStrategy: string;
 }
 
@@ -87,7 +68,7 @@ function formatTime(timeSeconds: number) {
 
 function VisualizerWorkspace({
   features,
-  generateReplay,
+  initialPreview,
   initialStrategy,
 }: VisualizerWorkspaceProps) {
   const [strategy, setStrategy] = useState(initialStrategy);
@@ -102,7 +83,6 @@ function VisualizerWorkspace({
   const [playbackSpeed, setPlaybackSpeed] = useState<(typeof PLAYBACK_SPEEDS)[number]>(1);
   const [isPlaying, setIsPlaying] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
-  const [isPlanGenerating, setIsPlanGenerating] = useState(false);
   const [generationError, setGenerationError] = useState<string | null>(null);
   const [isFeatureRailCollapsed, setIsFeatureRailCollapsed] = useState(false);
   const [isRobotCustomizationOpen, setIsRobotCustomizationOpen] = useState(false);
@@ -110,20 +90,27 @@ function VisualizerWorkspace({
   const [isLlmConfigurationOpen, setIsLlmConfigurationOpen] = useState(false);
   const [statistics, setStatistics] = useState<LlmStatistics | null>(null);
   const [isStatisticsOpen, setIsStatisticsOpen] = useState(false);
-  const [strategyPlan, setStrategyPlan] = useState<StrategyPlan | null>(null);
-  const [isStrategyPlanOpen, setIsStrategyPlanOpen] = useState(false);
+  const [debugTrace, setDebugTrace] = useState<readonly SimulationDebugTrace[]>([]);
+  const [isDebugTraceOpen, setIsDebugTraceOpen] = useState(false);
   const [isTimelinePinned, setIsTimelinePinned] = useState(false);
-  const initialized = useRef(false);
 
   async function handleGenerate() {
+    if (!llmConfiguration?.configured || isGenerating) return;
     setIsGenerating(true);
     setGenerationError(null);
     setIsPlaying(false);
+    setDebugTrace([]);
 
     try {
-      const nextScene = await generateReplay({ strategy, selectedFeatureIds, robotCustomization });
-      setScene(nextScene);
+      const response = await generateSimulation({
+        strategy,
+        selectedFeatureIds,
+        robotCustomization,
+      });
+      setScene(response.scene);
       setCurrentTimeSeconds(0);
+      if (response.statistics) setStatistics(response.statistics);
+      setDebugTrace(response.debugTrace ?? []);
     } catch (error) {
       setGenerationError(
         error instanceof Error
@@ -132,54 +119,6 @@ function VisualizerWorkspace({
       );
     } finally {
       setIsGenerating(false);
-    }
-  }
-
-  async function handleGenerateStrategy() {
-    if (!llmConfiguration?.configured || isPlanGenerating) return;
-    setIsPlanGenerating(true);
-    setGenerationError(null);
-
-    try {
-      const response = await generateStrategyPlan({
-        strategy,
-        selectedFeatureIds: [...selectedFeatureIds],
-        robotCustomization: {
-          widthFeet: robotCustomization.widthFeet,
-          lengthFeet: robotCustomization.lengthFeet,
-          translationSpeedFeetPerSecond: robotCustomization.translationSpeedFeetPerSecond,
-          spinSpeedRotationsPerSecond: robotCustomization.spinSpeedRotationsPerSecond,
-        },
-        enabledActions: NEUTRAL_ACTION_METADATA.filter((action) =>
-          (action.id === "drive-to" && selectedFeatureIds.includes("drive-planning"))
-          || (action.id === "collect-object" && selectedFeatureIds.includes("object-intake"))
-          || (action.id === "score-object" && selectedFeatureIds.includes("goal-scoring")),
-        ).map((action) => ({
-          ...action,
-          ...(Object.hasOwn(action, "zoneTags")
-            ? { zoneTags: [...(action as { readonly zoneTags: readonly string[] }).zoneTags] }
-            : {}),
-        })),
-        decisionContext: {
-          currentTimeSeconds,
-          durationSeconds: scene?.playback.timing.durationSeconds ?? 0,
-          status: frame?.status ?? "ready",
-        },
-      });
-      setStrategyPlan(response.plan);
-      setIsStrategyPlanOpen(true);
-      setStatistics(response.statistics ?? (await getLlmStatistics()));
-    } catch (error) {
-      setGenerationError(
-        error instanceof Error ? error.message : "The strategy plan could not be generated. Try again.",
-      );
-      try {
-        setStatistics(await getLlmStatistics());
-      } catch {
-        // Keep the generation error visible when the statistics endpoint is unavailable.
-      }
-    } finally {
-      setIsPlanGenerating(false);
     }
   }
 
@@ -196,7 +135,7 @@ function VisualizerWorkspace({
       reasoningEffort: "low",
     });
     setStatistics(null);
-    setStrategyPlan(null);
+    setDebugTrace([]);
   }
 
   async function openStatistics() {
@@ -207,12 +146,6 @@ function VisualizerWorkspace({
       // The empty state remains useful while the session has no recorded requests.
     }
   }
-
-  useEffect(() => {
-    if (initialized.current) return;
-    initialized.current = true;
-    void handleGenerate();
-  }, []);
 
   useEffect(() => {
     let active = true;
@@ -258,6 +191,24 @@ function VisualizerWorkspace({
         ? interpolatePlaybackFrame(scene.playback, currentTimeSeconds)
         : null,
     [currentTimeSeconds, scene],
+  );
+  const preview = useMemo<VisualizerPreview>(
+    () => ({
+      ...initialPreview,
+      initialFrame: {
+        ...initialPreview.initialFrame,
+        robot: {
+          ...initialPreview.initialFrame.robot,
+          widthFeet: robotCustomization.widthFeet,
+          lengthFeet: robotCustomization.lengthFeet,
+          translationSpeedFeetPerSecond:
+            robotCustomization.translationSpeedFeetPerSecond,
+          spinSpeedRotationsPerSecond:
+            robotCustomization.spinSpeedRotationsPerSecond,
+        },
+      },
+    }),
+    [initialPreview, robotCustomization],
   );
   const durationSeconds = scene?.playback.timing.durationSeconds ?? 0;
   const status = isGenerating ? "Generating" : frame?.status ?? "Ready";
@@ -310,12 +261,12 @@ function VisualizerWorkspace({
 
         <form className="glass-panel mb-[clamp(12px,2vh,20px)] shrink-0 rounded-[24px] p-3" onSubmit={(event) => {
           event.preventDefault();
-          void handleGenerateStrategy();
+          void handleGenerate();
         }}>
           <label className="sr-only" htmlFor="strategy-input">Strategy</label>
           <textarea
             className="h-[clamp(52px,7.5vh,64px)] w-full resize-none rounded-2xl border border-white/10 bg-black/10 px-4 py-3 text-sm leading-6 text-foreground outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:bg-black/20 disabled:text-muted-foreground dark:bg-black/15"
-            disabled={llmConfiguration === null || !llmConfiguration.configured || isPlanGenerating}
+            disabled={llmConfiguration === null || !llmConfiguration.configured || isGenerating}
             id="strategy-input"
             onChange={(event) => setStrategy(event.target.value)}
             placeholder={llmConfiguration?.configured ? "Describe how the robot should move and act during the match…" : "Please configure your LLM"}
@@ -327,7 +278,7 @@ function VisualizerWorkspace({
             </p>
             <div className="flex items-center gap-2">
               <Dialog onOpenChange={setIsLlmConfigurationOpen} open={isLlmConfigurationOpen}>
-                <DialogTrigger render={<Button className="h-10 rounded-xl px-3 text-sm" type="button" variant="ghost" />}>
+                <DialogTrigger render={<Button className="h-10 rounded-xl px-3 text-sm" disabled={isGenerating} type="button" variant="ghost" />}>
                   <Settings2Icon aria-hidden="true" />
                   Configure
                 </DialogTrigger>
@@ -345,11 +296,11 @@ function VisualizerWorkspace({
               </Button>
               <Button
                 className="h-10 rounded-xl px-4 text-sm shadow-lg shadow-orange-950/20"
-                disabled={llmConfiguration === null || !llmConfiguration.configured || isPlanGenerating}
+                disabled={llmConfiguration === null || !llmConfiguration.configured || isGenerating}
                 type="submit"
               >
-                {isPlanGenerating ? <LoaderCircleIcon aria-hidden="true" className="animate-spin" /> : <SparklesIcon aria-hidden="true" />}
-                {isPlanGenerating ? "Generating" : "Generate"}
+                {isGenerating ? <LoaderCircleIcon aria-hidden="true" className="animate-spin" /> : <SparklesIcon aria-hidden="true" />}
+                {isGenerating ? "Generating" : "Generate"}
               </Button>
             </div>
           </div>
@@ -369,6 +320,7 @@ function VisualizerWorkspace({
               <Button
                 aria-label={isFeatureRailCollapsed ? "Expand robot features" : "Collapse robot features"}
                 className="ml-auto rounded-xl"
+                disabled={isGenerating}
                 onClick={() => setIsFeatureRailCollapsed((collapsed) => !collapsed)}
                 size="icon"
                 type="button"
@@ -391,6 +343,7 @@ function VisualizerWorkspace({
                       aria-label={feature.label}
                       checked={isSelected}
                       className="sr-only"
+                      disabled={isGenerating}
                       onChange={() => toggleFeature(feature.id)}
                       type="checkbox"
                     />
@@ -420,6 +373,7 @@ function VisualizerWorkspace({
                       className={`w-full rounded-xl ${isFeatureRailCollapsed ? "px-0" : "justify-start"}`}
                       size={isFeatureRailCollapsed ? "icon" : "default"}
                       title={isFeatureRailCollapsed ? "Customize Robot" : undefined}
+                      disabled={isGenerating}
                       type="button"
                       variant="ghost"
                     />
@@ -439,7 +393,12 @@ function VisualizerWorkspace({
           </aside>
 
           <section className="glass-panel relative min-w-0 flex-1 rounded-[28px] p-3" aria-label="Replay workspace">
-            <FieldViewport frame={frame} scene={scene} />
+            <FieldViewport
+              frame={frame}
+              isGenerating={isGenerating}
+              preview={preview}
+              scene={scene}
+            />
 
             <div
               className="group/timeline absolute inset-x-3 bottom-3 z-20 h-24"
@@ -455,7 +414,7 @@ function VisualizerWorkspace({
               <Button
                 aria-label="Restart replay"
                 className="rounded-xl"
-                disabled={scene === null}
+                disabled={scene === null || isGenerating}
                 onClick={() => {
                   setCurrentTimeSeconds(0);
                   setIsPlaying(false);
@@ -470,7 +429,7 @@ function VisualizerWorkspace({
                 aria-label={isPlaying ? "Pause replay" : "Play replay"}
                 aria-pressed={isPlaying}
                 className="size-11 rounded-2xl shadow-lg shadow-orange-950/20"
-                disabled={scene === null}
+                disabled={scene === null || isGenerating}
                 onClick={togglePlayback}
                 size="icon"
                 type="button"
@@ -481,7 +440,7 @@ function VisualizerWorkspace({
               <input
                 aria-label="Replay position"
                 className="h-5 min-w-24 flex-1 cursor-pointer appearance-none bg-transparent accent-[#f7931e] [&::-moz-range-thumb]:size-4 [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:border-0 [&::-moz-range-thumb]:bg-[#f7931e] [&::-moz-range-track]:h-1.5 [&::-moz-range-track]:rounded-full [&::-moz-range-track]:bg-white/20 [&::-webkit-slider-runnable-track]:h-1.5 [&::-webkit-slider-runnable-track]:rounded-full [&::-webkit-slider-runnable-track]:bg-white/20 [&::-webkit-slider-thumb]:-mt-[5px] [&::-webkit-slider-thumb]:size-4 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-[#f7931e]"
-                disabled={scene === null}
+                disabled={scene === null || isGenerating}
                 max={durationSeconds || 1}
                 min="0"
                 onChange={(event) => {
@@ -500,6 +459,7 @@ function VisualizerWorkspace({
                   <button
                     aria-pressed={playbackSpeed === speed}
                     className={`rounded-lg px-2 py-1 text-xs font-medium transition-colors ${playbackSpeed === speed ? "bg-[#f7931e] text-[#201407]" : "text-muted-foreground hover:text-foreground"}`}
+                    disabled={isGenerating}
                     key={speed}
                     onClick={() => setPlaybackSpeed(speed)}
                     type="button"
@@ -520,6 +480,7 @@ function VisualizerWorkspace({
                 size="icon"
                 type="button"
                 variant="ghost"
+                disabled={isGenerating}
               >
                 <PinIcon
                   aria-hidden="true"
@@ -533,7 +494,7 @@ function VisualizerWorkspace({
                     <Button
                       aria-label="Open replay details"
                       className="rounded-xl"
-                      disabled={scene === null}
+                      disabled={scene === null || isGenerating}
                       size="icon"
                       variant="ghost"
                     />
@@ -553,9 +514,23 @@ function VisualizerWorkspace({
         </div>
       </div>
 
-      <Dialog onOpenChange={setIsStrategyPlanOpen} open={isStrategyPlanOpen}>
-        <StrategyPlanDialog plan={strategyPlan} />
-      </Dialog>
+      {import.meta.env.DEV ? (
+        <Dialog onOpenChange={setIsDebugTraceOpen} open={isDebugTraceOpen}>
+          <DialogTrigger
+            render={
+              <Button
+                className="absolute bottom-5 left-5 z-30 rounded-xl bg-black/35 text-xs text-white/80 backdrop-blur-xl hover:bg-black/50"
+                disabled={debugTrace.length === 0 || isGenerating}
+                type="button"
+                variant="ghost"
+              />
+            }
+          >
+            LLM interactions{debugTrace.length > 0 ? ` · ${debugTrace.length}` : ""}
+          </DialogTrigger>
+          <LlmInteractionsDialog traces={debugTrace} />
+        </Dialog>
+      ) : null}
       <Dialog onOpenChange={setIsStatisticsOpen} open={isStatisticsOpen}>
         <LlmStatisticsDialog statistics={statistics} />
       </Dialog>

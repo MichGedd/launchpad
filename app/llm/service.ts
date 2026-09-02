@@ -26,6 +26,17 @@ export interface StrategyModelResponse {
   readonly usage?: unknown;
 }
 
+/** The exact provider request/response pair, available only to opt-in diagnostics. */
+export interface StrategyModelTrace {
+  readonly request: StrategyModelRequest;
+  readonly response: StrategyModelResponse | null;
+}
+
+export interface StrategyGenerationOptions {
+  /** Called with the exact request and response used for this generation. */
+  readonly onTrace?: (trace: StrategyModelTrace) => void;
+}
+
 export interface StrategyModelRunner {
   generate(request: StrategyModelRequest): Promise<StrategyModelResponse>;
 }
@@ -62,23 +73,28 @@ export class StrategyPlanner {
   async generate(
     configuration: StrategyPlanningConfiguration,
     request: StrategyGenerationRequest,
+    options: StrategyGenerationOptions = {},
   ): Promise<{ readonly plan: StrategyPlan; readonly usage: TokenUsage }> {
     const prompts = buildStrategyPrompt(request);
+    const modelRequest: StrategyModelRequest = {
+      model: configuration.model,
+      reasoningEffort: configuration.reasoningEffort,
+      system: prompts.system,
+      prompt: prompts.prompt,
+      schema: strategyPlanSchema,
+    };
     let response: StrategyModelResponse;
     try {
-      response = await this.#runnerFactory(configuration.apiKey).generate({
-        model: configuration.model,
-        reasoningEffort: configuration.reasoningEffort,
-        system: prompts.system,
-        prompt: prompts.prompt,
-        schema: strategyPlanSchema,
-      });
+      response = await this.#runnerFactory(configuration.apiKey).generate(modelRequest);
     } catch (error) {
+      options.onTrace?.({ request: modelRequest, response: null });
       const usage = normalizeTokenUsage(error instanceof Object && "usage" in error
         ? error.usage
         : undefined);
       throw new StrategyPlanningError("The configured LLM could not generate a strategy plan.", usage);
     }
+
+    options.onTrace?.({ request: modelRequest, response });
 
     const usage = normalizeTokenUsage(response.usage);
     if (!usage) throw new StrategyPlanningError("The LLM response did not include token usage.");
@@ -150,15 +166,45 @@ export function createDevelopmentMockStrategyRunner(): StrategyModelRunner {
   return {
     async generate(request) {
       const canDrive = request.prompt.includes('"id":"drive-to"');
+      const canCollect = request.prompt.includes('"id":"collect-object"');
+      const canScore = request.prompt.includes('"id":"score-object"');
+      const holdsGameObject = request.prompt.includes('"inventory":{"game-object":1}');
+      // Keep the original one-shot behavior for focused runner tests that do
+      // not provide a controller decision context.
+      const elapsedMatch = request.prompt.match(/"elapsedSeconds":([0-9]+(?:\.[0-9]+)?)/);
+      const elapsedSeconds = elapsedMatch ? Number(elapsedMatch[1]) : null;
+      const hasWait = request.prompt.includes('"id":"wait"');
+      const actions = elapsedSeconds === null
+        ? canDrive
+          ? [{ actionId: "drive-to", parameters: { xFeet: 12, yFeet: 6, headingRotations: 0 } }]
+          : []
+        : elapsedSeconds < 0.5
+          ? [
+              { actionId: "drive-to", parameters: { xFeet: 18, yFeet: 5, headingRotations: 0 } },
+              ...(canCollect ? [{ actionId: "collect-object", parameters: {} }] : []),
+            ]
+          : elapsedSeconds < 3
+            ? [
+                { actionId: "drive-to", parameters: { xFeet: 38, yFeet: 18, headingRotations: 0.25 } },
+                ...(canScore && holdsGameObject ? [{ actionId: "score-object", parameters: {} }] : []),
+                { actionId: "drive-to", parameters: { xFeet: 48, yFeet: 8, headingRotations: 0.875 } },
+              ]
+            : elapsedSeconds < 8 && canDrive
+              ? [
+                  { actionId: "drive-to", parameters: { xFeet: 18, yFeet: 5, headingRotations: 0 } },
+                  ...(canCollect ? [{ actionId: "collect-object", parameters: {} }] : []),
+                  { actionId: "drive-to", parameters: { xFeet: 38, yFeet: 18, headingRotations: 0.25 } },
+                  ...(canCollect && canScore ? [{ actionId: "score-object", parameters: {} }] : []),
+                ]
+              : hasWait
+                ? [{ actionId: "wait", parameters: { durationSeconds: 135 } }]
+                : canDrive
+                  ? [{ actionId: "drive-to", parameters: { xFeet: 48, yFeet: 22, headingRotations: 0 } }]
+                  : [];
       return {
         output: {
-          summary: "Mock plan generated locally without contacting OpenAI.",
-          actions: canDrive
-            ? [{
-                actionId: "drive-to",
-                parameters: { xFeet: 12, yFeet: 6, headingRotations: 0 },
-              }]
-            : [],
+          summary: `Mock plan ${elapsedSeconds === null ? "generated" : `at ${elapsedSeconds.toFixed(1)} seconds`} locally without contacting OpenAI.`,
+          actions,
         },
         usage: {
           inputTokens: 120,

@@ -1,14 +1,12 @@
 import { VisualizerWorkspace } from "~/components/visualizer/visualizer-workspace";
-import {
-  createDemoReplay,
-  DEFAULT_ROBOT_FEATURE_OPTIONS,
-} from "~/visualizer";
+import { createNeutralVisualizerPreview } from "~/simulation";
+import { DEFAULT_ROBOT_FEATURE_OPTIONS } from "~/visualizer";
 
 export default function Home() {
   return (
     <VisualizerWorkspace
       features={DEFAULT_ROBOT_FEATURE_OPTIONS}
-      generateReplay={createDemoReplay}
+      initialPreview={createNeutralVisualizerPreview()}
       initialStrategy=""
     />
   );

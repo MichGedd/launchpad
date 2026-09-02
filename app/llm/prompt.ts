@@ -18,7 +18,7 @@ export const NEUTRAL_GAME_CONTEXT: SeasonGameContext = {
 };
 
 export const LAUNCHPAD_API_INSTRUCTIONS =
-  "## Trusted Launchpad API instructions\nReturn only a strategy plan. Each action must use an actionId from the enabled action metadata and a JSON object for parameters. Actions are suggestions only and will not be executed by this request. Respect the robot state, action preconditions, match time, and inventory.";
+  "## Trusted Launchpad API instructions\nReturn only a strategy plan for the simulator to execute. Each action must use an actionId from the enabled action metadata and a JSON object for parameters. Advance the match toward completion while respecting the robot state, action preconditions, match time, and inventory.";
 
 export function buildGameInstructionSection(gameContext: SeasonGameContext = NEUTRAL_GAME_CONTEXT): string {
   return `## Trusted game instructions: ${gameContext.name}\n${gameContext.instructions}`;
@@ -89,6 +89,9 @@ export function decisionContextFromEngine(decision: DecisionState): Record<strin
     metrics: decision.metrics,
     activeAction: decision.activeAction,
     queuedActions: decision.queuedActions,
+    pickupZones: decision.pickupZones,
+    scoreZones: decision.scoreZones,
+    nonTraversalZones: decision.nonTraversalZones,
     distanceToNearestPickupZoneFeet: decision.distanceToNearestPickupZoneFeet,
     distanceToNearestScoreZoneFeet: decision.distanceToNearestScoreZoneFeet,
     block: decision.block,

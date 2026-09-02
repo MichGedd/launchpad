@@ -5,18 +5,26 @@ import type {
   LlmProvider,
   LlmStatistics,
   ReasoningEffort,
-  StrategyGenerationRequest,
-  StrategyGenerationResponse,
   StrategyPlan,
+  TokenUsage,
 } from "./schemas";
+import type {
+  SimulationDebugTrace,
+  SimulationGenerationRequest,
+  SimulationGenerationResponse,
+} from "~/simulation";
 
-export type { LlmConfigurationRequest, LlmConfigurationStatus, LlmStatistics, LlmProvider, ReasoningEffort, StrategyPlan };
-export type { LlmActionRequest, StrategyGenerationRequest, StrategyGenerationResponse };
-
-/** The gateway includes updated session statistics after a successful generation. */
-export type StrategyPlanResponse = StrategyGenerationResponse & {
-  readonly statistics?: LlmStatistics;
+export type {
+  LlmConfigurationRequest,
+  LlmConfigurationStatus,
+  LlmStatistics,
+  LlmProvider,
+  ReasoningEffort,
+  StrategyPlan,
+  TokenUsage,
 };
+export type { LlmActionRequest };
+export type { SimulationDebugTrace };
 
 const DEFAULT_CONFIGURATION: LlmConfigurationStatus = {
   provider: "openai",
@@ -71,10 +79,10 @@ export function disconnectLlm(): Promise<void> {
   return request<void>("/api/llm/configuration", { method: "DELETE" });
 }
 
-export function generateStrategyPlan(
-  requestBody: StrategyGenerationRequest,
-): Promise<StrategyPlanResponse> {
-  return request<StrategyPlanResponse>("/api/strategy-plan", {
+export function generateSimulation(
+  requestBody: SimulationGenerationRequest,
+): Promise<SimulationGenerationResponse> {
+  return request<SimulationGenerationResponse>("/api/simulation", {
     method: "POST",
     body: JSON.stringify(requestBody),
   });

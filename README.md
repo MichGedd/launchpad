@@ -31,7 +31,7 @@ In the Codex desktop app, the checked-in local environment also installs depende
 | `npm run setup` | Clean-install dependencies and start the development server |
 | `npm run dev` | Start the visualizer and same-origin API development server |
 | `npm start` | Stable development-server command used by Codex |
-| `npm run test` | Run the headless simulation engine tests |
+| `npm run test` | Run the engine, LLM, orchestration, visualizer, and server tests |
 | `npm run typecheck` | Generate route types and check strict TypeScript |
 | `npm run build` | Build the production SPA into `build/client` |
 | `npm run check` | Run type checking and the production build |
@@ -46,6 +46,7 @@ In the Codex desktop app, the checked-in local environment also installs depende
 - `app/components/ui` contains shadcn/ui source owned by this project.
 - `app/engine` contains the headless simulation engine. See its [usage and API documentation](app/engine/README.md).
 - `app/llm` contains the shared LLM contracts, compact prompt adapter, session statistics, and strategy-planning service.
+- `app/simulation` contains the season-independent LLM/engine controller and the replaceable neutral scenario adapter.
 - `server/index.ts` keeps user-supplied API keys in process memory and exposes the same-origin LLM API.
 - `components.json` controls how future shadcn components are generated.
 
@@ -82,4 +83,4 @@ $env:LAUNCHPAD_MOCK_LLM="1"
 npm run dev
 ```
 
-Open Launchpad, choose **Configure**, and enter a clearly fake value such as `local-mock-only` in the API-key field. Saving, generating, and opening **Report Statistics** then exercise the full browser-to-server flow with deterministic output and token counts, without contacting OpenAI. Stop the server and remove the environment variable with `Remove-Item Env:LAUNCHPAD_MOCK_LLM` before testing the real provider. Mock mode is ignored in production.
+Open Launchpad, choose **Configure**, and enter a clearly fake value such as `local-mock-only` in the API-key field. Saving and generating then exercise the full browser → LLM → simulator decision loop without contacting OpenAI. The deterministic mock makes four decisions with action-queue lengths of 2, 3, 4, and 1, completing two pickup-to-score cycles before finishing the 135-second replay. Development builds expose the exact completed exchanges through **LLM interactions**; production servers never include them in API responses. Stop the server and remove the environment variable with `Remove-Item Env:LAUNCHPAD_MOCK_LLM` before testing the real provider. Mock mode is ignored in production.

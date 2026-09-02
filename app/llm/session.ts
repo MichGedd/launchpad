@@ -118,6 +118,7 @@ export class SessionStore {
     const session = this.get(sessionId);
     if (!session || session.generationInProgress) return false;
     session.generationInProgress = true;
+    session.latestGeneration = emptyStatistics();
     return true;
   }
 
@@ -136,7 +137,9 @@ export class SessionStore {
       totalTokens: usage.totalTokens,
       cachedInputTokens: usage.cachedInputTokens,
     };
-    session.latestGeneration = increment;
+    session.latestGeneration = session.generationInProgress
+      ? addStatistics(session.latestGeneration ?? emptyStatistics(), increment)
+      : increment;
     session.sessionTotal = addStatistics(session.sessionTotal, increment);
     return this.getStatistics(sessionId);
   }
