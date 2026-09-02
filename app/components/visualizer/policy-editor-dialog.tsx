@@ -110,7 +110,7 @@ export function PolicyEditorDialog({ open, policy, onOpenChange, onSave }: Polic
           {currentPhase.rules.map((rule, index) => (
             <RuleCard
               index={index}
-              key={`${rule.id}-${index}`}
+              key={index}
               rule={rule}
               total={currentPhase.rules.length}
               onDelete={() => setDraft((current) => deletePolicyRule(current, phase, index))}
