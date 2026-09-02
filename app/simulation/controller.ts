@@ -34,6 +34,7 @@ export interface SimulationControllerInput {
   readonly strategy: string;
   readonly selectedFeatureIds: readonly string[];
   readonly robotCustomization: RobotCustomization;
+  readonly navGrid: import("../engine/types.ts").NavGridDefinition;
 }
 
 export interface SimulationDebugTrace {
@@ -91,7 +92,10 @@ export async function runSimulationWithLlm(
     throw new SimulationControllerError(`maxDecisions must be an integer from 1 to ${MAX_SIMULATION_DECISIONS}.`);
   }
 
-  const game = options.game ?? createNeutralGameDefinition();
+  const game = {
+    ...(options.game ?? createNeutralGameDefinition()),
+    navGrid: options.input.navGrid,
+  };
   const robotConfiguration = options.createRobotConfiguration?.(options.input)
     ?? neutralRobotConfiguration(options.input.selectedFeatureIds, options.input.robotCustomization);
   const simulation = createSimulation(
@@ -174,7 +178,7 @@ export async function runSimulationWithLlm(
   const playback = simulation.exportPlayback();
   if (playback === null) throw new SimulationControllerError("Simulation playback was not recorded.");
   return {
-    scene: { field: options.field ?? NEUTRAL_SIMULATION_FIELD, playback },
+    scene: { field: options.field ?? NEUTRAL_SIMULATION_FIELD, navGrid: options.input.navGrid, playback },
     usages: Object.freeze([...usages]),
     decisionCount: traces.length > 0 ? traces.length : usages.length,
     ...(options.includeDebugTraces ? { debugTrace: Object.freeze([...traces]) } : {}),

@@ -6,6 +6,7 @@ import {
   createNeutralVisualizerPreview,
   NEUTRAL_FIELD_PRESENTATION,
   NEUTRAL_INITIAL_POSE,
+  NEUTRAL_NAV_GRID,
   NEUTRAL_RANKING_POINT_DEFINITIONS,
   NEUTRAL_ZONES,
   neutralRobotConfiguration,
@@ -19,6 +20,8 @@ test("neutral preview shares field geometry and ranking data with its engine def
   assert.strictEqual(preview.field, NEUTRAL_FIELD_PRESENTATION);
   assert.strictEqual(preview.zones, NEUTRAL_ZONES);
   assert.strictEqual(preview.zones, game.zones);
+  assert.strictEqual(preview.navGrid, NEUTRAL_NAV_GRID);
+  assert.strictEqual(preview.navGrid, game.navGrid);
   assert.strictEqual(preview.rankingPointDefinitions, NEUTRAL_RANKING_POINT_DEFINITIONS);
   assert.strictEqual(preview.rankingPointDefinitions, game.rankingPoints);
 });

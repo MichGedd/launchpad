@@ -21,7 +21,7 @@ import {
 } from "../app/simulation/index.ts";
 
 const SESSION_COOKIE = "launchpad_session";
-const BODY_LIMIT = "64kb";
+const BODY_LIMIT = "512kb";
 const projectRoot = fileURLToPath(new URL("..", import.meta.url));
 
 export interface LaunchpadServerOptions {

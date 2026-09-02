@@ -2,6 +2,8 @@
 
 The Launchpad simulation engine is a synchronous, headless TypeScript library. It advances robot actions using simulated game time, so a simulation runs as quickly as the computer can calculate it rather than in real time.
 
+When a `GameDefinition` supplies a `navGrid`, `drive-to` actions are routed through a cached, conservative A* occupancy grid at the fixed `NAV_GRID_CELL_SIZE_INCHES` (0.5 inch) fidelity. The drive request remains a destination pose; generated grid cells and route waypoints are internal engine details. A NavGrid uses portable rectangle and circle zones with either `general` or `feature-specific` traversal rules. Omitting `navGrid` retains the legacy direct-drive and collision behavior for backwards compatibility.
+
 The engine has no React, browser, visualization, or LLM dependency. A controller supplies action queues, and a future visualizer can consume the optional playback data.
 
 ## Conventions and defaults
@@ -118,7 +120,8 @@ const simulation = createSimulation(game, robot, options);
 | Field | Type | Description |
 | --- | --- | --- |
 | `gameObjectTypes` | `readonly string[]` | Unique object-type IDs that inventory actions may use. |
-| `zones` | `readonly Zone[]` | Pickup, scoring, and non-traversal areas for the game. |
+| `zones` | `readonly Zone[]` | Pickup and scoring areas, plus legacy non-traversal areas when no NavGrid is supplied. |
+| `navGrid` | `NavGridDefinition` | Optional season field bounds and rectangle/circle navigation obstacles. |
 | `timing` | `MatchTiming` | Optional match and endgame durations. Defaults to 135 and 30 seconds. |
 | `actions` | `readonly ActionDefinition[]` | Optional registered game-specific actions. |
 | `robotFeatures` | `readonly RobotFeature[]` | Optional features mapping selectable feature IDs to action IDs. |
@@ -187,7 +190,7 @@ Every robot can use `DRIVE_ACTION_ID`, whose value is `"drive-to"`. Its paramete
 }
 ```
 
-Drive actions follow a straight translation path while independently taking the shortest rotation to the requested heading. They clamp to the exact target without overshooting.
+When the game supplies a NavGrid, drive actions follow an internally generated A* route while independently taking the shortest rotation to the requested heading. They clamp to the exact target without exposing route waypoints to the controller. Without a NavGrid, the legacy straight-drive behavior remains available.
 
 Game actions must be registered in `GameDefinition.actions` and enabled by a selected robot feature:
 
@@ -314,14 +317,14 @@ type ZoneShape =
 
 Pickup and score contact uses the robot's oriented rectangular footprint. Decision-state distances are measured from that footprint to the closest relevant zone boundary and become zero on contact.
 
-Drive movement uses swept collision checks, so a thin non-traversal zone cannot be skipped between updates. On first contact the engine:
+NavGrid obstacles are rasterized at 0.5-inch fidelity after conservative robot-footprint inflation. A* uses eight-way movement without diagonal corner cutting, then simplifies the route using collision-safe line-of-sight checks. General zones always block movement; feature-specific zones are traversable only when the robot has the zone's required feature. If no path exists, the engine blocks before moving with code `path-not-found` and preserves the queue.
+
+For legacy games without a NavGrid, drive movement still uses swept collision checks against `Zone.kind === "non-traversal"`. On first contact the engine:
 
 1. Stops the robot at the contact pose.
 2. Sets status to `blocked` with code `non-traversal-zone`.
 3. Preserves the active drive and remaining queue for inspection.
 4. Records an `action-blocked` event when playback is enabled.
-
-Pathfinding around obstacles is planned as a future engine improvement. For now, the controller must replace the blocked queue with a route away from the obstacle.
 
 ## Decision state
 

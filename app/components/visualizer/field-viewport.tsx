@@ -34,6 +34,7 @@ function FieldViewport({
   const zones = scene?.playback.zones ?? preview.zones;
   const rankingPointDefinitions =
     scene?.playback.rankingPointDefinitions ?? preview.rankingPointDefinitions;
+  const navGrid = scene?.navGrid ?? preview.navGrid;
 
   return (
     <div
@@ -96,6 +97,16 @@ function FieldViewport({
           y1="0.8"
           y2={field.heightFeet - 0.8}
         />
+
+        {navGrid.zones.map((zone) => {
+          const className = zone.traversalRule.kind === "feature-specific"
+            ? "fill-[#21409a]/28 stroke-[#8ea5ff]"
+            : "fill-black/35 stroke-white/60";
+          if (zone.shape.type === "circle") {
+            return <circle className={className} cx={zone.shape.center.xFeet} cy={field.heightFeet - zone.shape.center.yFeet} data-navgrid-zone-id={zone.id} key={`nav-${zone.id}`} r={zone.shape.radiusFeet} strokeWidth="0.1" />;
+          }
+          return <rect className={className} data-navgrid-zone-id={zone.id} height={zone.shape.heightFeet} key={`nav-${zone.id}`} transform={`rotate(${-((zone.shape.headingRotations ?? 0) * 360)} ${zone.shape.center.xFeet} ${field.heightFeet - zone.shape.center.yFeet})`} width={zone.shape.widthFeet} x={zone.shape.center.xFeet - zone.shape.widthFeet / 2} y={field.heightFeet - zone.shape.center.yFeet - zone.shape.heightFeet / 2} strokeWidth="0.1" />;
+        })}
 
         {zones.map((zone) => {
           const className =

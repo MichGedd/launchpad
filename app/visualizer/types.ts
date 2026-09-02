@@ -4,6 +4,7 @@ import type {
   SimulationPlayback,
   Zone,
 } from "../engine/types.ts";
+import type { NavGridDefinition } from "../engine/types.ts";
 
 /** Presentation metadata for the field shown by the visualizer. */
 export interface FieldPresentation {
@@ -44,12 +45,14 @@ export const DEFAULT_ROBOT_CUSTOMIZATION: RobotCustomization = Object.freeze({
 export interface VisualizerScene {
   readonly playback: SimulationPlayback;
   readonly field: FieldPresentation;
+  readonly navGrid: NavGridDefinition;
 }
 
 /** Field and zero-time robot state shown before the first simulation replay. */
 export interface VisualizerPreview {
   readonly field: FieldPresentation;
   readonly zones: readonly Zone[];
+  readonly navGrid: NavGridDefinition;
   readonly rankingPointDefinitions: readonly Required<RankingPointDefinition>[];
   readonly initialFrame: PlaybackFrame;
 }
@@ -59,6 +62,7 @@ export interface ReplayGenerationRequest {
   readonly strategy: string;
   readonly selectedFeatureIds: readonly string[];
   readonly robotCustomization: RobotCustomization;
+  readonly navGrid: NavGridDefinition;
 }
 
 /** Async boundary between the UI and an LLM or another replay-producing controller. */

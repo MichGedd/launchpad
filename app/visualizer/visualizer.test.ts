@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import type { PlaybackFrame, RobotState, SimulationPlayback } from "../engine/types.ts";
+import { NAV_GRID_CELL_SIZE_INCHES } from "../engine/types.ts";
 import {
   calculateEarnedRankingPoints,
   clampPlaybackTime,
@@ -50,6 +51,15 @@ function metrics(points = 0, collectionProgress = 0) {
     },
   };
 }
+
+const TEST_NAV_GRID = {
+  version: 1 as const,
+  seasonId: "test",
+  fieldWidthFeet: 54,
+  fieldHeightFeet: 27,
+  cellSizeInches: NAV_GRID_CELL_SIZE_INCHES,
+  zones: [],
+};
 
 const FRAMES: readonly PlaybackFrame[] = [
   { timeSeconds: 2, robot: robot(0, 0, 0), metrics: metrics(), status: "running" },
@@ -129,11 +139,12 @@ describe("deterministic demo replay generator", () => {
     strategy: "Drive to the far side, then return to the start zone.",
     selectedFeatureIds: ["drive-planning"],
     robotCustomization: DEFAULT_ROBOT_CUSTOMIZATION,
+    navGrid: TEST_NAV_GRID,
   };
 
   test("rejects an empty strategy with an actionable error", async () => {
     await assert.rejects(
-      createDemoReplay({ strategy: "  ", selectedFeatureIds: [], robotCustomization: DEFAULT_ROBOT_CUSTOMIZATION }),
+      createDemoReplay({ strategy: "  ", selectedFeatureIds: [], robotCustomization: DEFAULT_ROBOT_CUSTOMIZATION, navGrid: TEST_NAV_GRID }),
       /Enter a strategy before generating a replay/,
     );
   });

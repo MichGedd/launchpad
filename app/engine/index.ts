@@ -13,4 +13,5 @@ export {
   shortestHeadingDelta,
 } from "./geometry.ts";
 export { createSeededRandom } from "./random.ts";
+export { NavGridNavigator, validateNavGrid } from "./navigation.ts";
 export * from "./types.ts";

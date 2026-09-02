@@ -8,6 +8,7 @@ import {
   zoneCharacteristicSize,
 } from "./geometry.ts";
 import { createSeededRandom } from "./random.ts";
+import { NavGridNavigator } from "./navigation.ts";
 import {
   DEFAULT_MATCH_TIMING,
   DEFAULT_ROBOT_DIMENSION_FEET,
@@ -54,6 +55,8 @@ interface ActiveDriveAction extends ValidatedAction {
   readonly definition: null;
   readonly parameters: Pose;
   readonly startPose: Pose;
+  readonly path: readonly Pose[];
+  readonly pathDistanceFeet: number;
   readonly translationDurationSeconds: number;
   readonly rotationDurationSeconds: number;
   readonly totalDurationSeconds: number;
@@ -163,7 +166,7 @@ function validateRobot(configuration: RobotConfiguration, game: GameDefinition):
 }
 
 function driveMetadata(): ActionMetadata {
-  return { id: DRIVE_ACTION_ID, description: "Drive in a straight line to an X, Y, and heading pose." };
+  return { id: DRIVE_ACTION_ID, description: "Drive to an X, Y, and heading pose." };
 }
 
 function validateDriveParameters(parameters: unknown): { valid: true; value: Pose } | { valid: false; message: string } {
@@ -244,6 +247,7 @@ export class SimulationEngine {
   readonly #definitions = new Map<string, ActionDefinition<unknown, unknown>>();
   readonly #enabledActionIds = new Set<string>([DRIVE_ACTION_ID]);
   readonly #robot: MutableRobotState;
+  readonly #navGridNavigator: NavGridNavigator | null;
   readonly #metrics: MutableMatchMetrics;
   readonly #recordPlayback: boolean;
   readonly #frames: PlaybackFrame[] = [];
@@ -302,6 +306,9 @@ export class SimulationEngine {
         this.#enabledActionIds.add(actionId);
       }
     }
+    this.#navGridNavigator = game.navGrid
+      ? new NavGridNavigator(game.navGrid, this.#robot, [...selectedFeatures], knownFeatures)
+      : null;
     if (this.#recordPlayback) this.#recordFrame();
   }
 
@@ -403,13 +410,47 @@ export class SimulationEngine {
     if (!next) return false;
     if (next.definition === null) {
       const target = next.parameters as Pose;
-      const translationDistance = Math.hypot(target.xFeet - this.#robot.pose.xFeet, target.yFeet - this.#robot.pose.yFeet);
+      const startPose = { ...this.#robot.pose };
+      const pathPoints = this.#navGridNavigator?.findPath(startPose, target);
+      if (this.#navGridNavigator && !pathPoints) {
+        this.#active = {
+          ...next,
+          definition: null,
+          parameters: target,
+          startPose,
+          path: [],
+          pathDistanceFeet: 0,
+          translationDurationSeconds: 0,
+          rotationDurationSeconds: 0,
+          totalDurationSeconds: 0,
+          elapsedSeconds: 0,
+        };
+        this.#block = {
+          code: "path-not-found",
+          actionId: next.actionId,
+          message: "No traversable path exists between the robot and the requested drive destination.",
+        };
+        this.#status = "blocked";
+        this.#events.push({ type: "action-blocked", actionId: next.actionId, timeSeconds: this.#elapsedSeconds });
+        return false;
+      }
+      const path = (pathPoints ?? [startPose, target]).map((point) => ({
+        xFeet: point.xFeet,
+        yFeet: point.yFeet,
+        headingRotations: 0,
+      }));
+      const translationDistance = path.reduce((total, point, index) => index === 0 ? total : total + Math.hypot(
+        point.xFeet - path[index - 1]!.xFeet,
+        point.yFeet - path[index - 1]!.yFeet,
+      ), 0);
       const rotationDistance = Math.abs(shortestHeadingDelta(this.#robot.pose.headingRotations, target.headingRotations));
       this.#active = {
         ...next,
         definition: null,
         parameters: target,
-        startPose: { ...this.#robot.pose },
+        startPose,
+        path,
+        pathDistanceFeet: translationDistance,
         translationDurationSeconds: translationDistance / this.#robot.translationSpeedFeetPerSecond,
         rotationDurationSeconds: rotationDistance / this.#robot.spinSpeedRotationsPerSecond,
         totalDurationSeconds: Math.max(
@@ -482,7 +523,30 @@ export class SimulationEngine {
       ? 1 : Math.min(1, elapsedSeconds / action.translationDurationSeconds);
     const rotationProgress = action.rotationDurationSeconds <= TIME_EPSILON
       ? 1 : Math.min(1, elapsedSeconds / action.rotationDurationSeconds);
-    return interpolatePose(action.startPose, action.parameters, translationProgress, rotationProgress);
+    const position = this.#drivePositionAt(action, translationProgress);
+    const heading = interpolatePose(action.startPose, action.parameters, 0, rotationProgress).headingRotations;
+    return { ...position, headingRotations: heading };
+  }
+
+  #drivePositionAt(action: ActiveDriveAction, progress: number): { xFeet: number; yFeet: number } {
+    if (action.path.length < 2 || action.pathDistanceFeet <= TIME_EPSILON) {
+      return { xFeet: action.parameters.xFeet, yFeet: action.parameters.yFeet };
+    }
+    let distance = action.pathDistanceFeet * Math.max(0, Math.min(1, progress));
+    for (let index = 1; index < action.path.length; index += 1) {
+      const previous = action.path[index - 1]!;
+      const current = action.path[index]!;
+      const segment = Math.hypot(current.xFeet - previous.xFeet, current.yFeet - previous.yFeet);
+      if (distance <= segment || index === action.path.length - 1) {
+        const segmentProgress = segment <= TIME_EPSILON ? 1 : distance / segment;
+        return {
+          xFeet: previous.xFeet + (current.xFeet - previous.xFeet) * segmentProgress,
+          yFeet: previous.yFeet + (current.yFeet - previous.yFeet) * segmentProgress,
+        };
+      }
+      distance -= segment;
+    }
+    return { xFeet: action.parameters.xFeet, yFeet: action.parameters.yFeet };
   }
 
   #firstCollision(
@@ -490,6 +554,7 @@ export class SimulationEngine {
     startElapsed: number,
     endElapsed: number,
   ): { elapsedSeconds: number; pose: Pose; zone: Zone } | null {
+    if (this.#navGridNavigator) return null;
     const obstacles = this.#game.zones.filter((zone) => zone.kind === "non-traversal");
     if (obstacles.length === 0 || endElapsed <= startElapsed) return null;
     const distance = Math.hypot(
@@ -726,6 +791,7 @@ export class SimulationEngine {
       rankingPointDefinitions: structuredClone(this.#rankingPointDefinitions),
       frames,
       events: structuredClone(this.#events),
+      ...(this.#game.navGrid ? { navGrid: structuredClone(this.#game.navGrid) } : {}),
     });
   }
 

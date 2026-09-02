@@ -1,5 +1,6 @@
 import type {
   MatchMetrics,
+  NavGridDefinition,
   PlaybackFrame,
   Pose,
   RankingPointDefinition,
@@ -18,6 +19,27 @@ export const NEUTRAL_FIELD_PRESENTATION: FieldPresentation = Object.freeze({
   heightFeet: 27,
 });
 
+/** Default navigation geometry for the season-neutral master-branch field. */
+export const NEUTRAL_NAV_GRID: NavGridDefinition = Object.freeze({
+  version: 1,
+  seasonId: "neutral",
+  fieldWidthFeet: NEUTRAL_FIELD_PRESENTATION.widthFeet,
+  fieldHeightFeet: NEUTRAL_FIELD_PRESENTATION.heightFeet,
+  cellSizeInches: 0.5,
+  zones: Object.freeze([
+    Object.freeze({
+      id: "field-divider",
+      shape: Object.freeze({
+        type: "rectangle" as const,
+        center: Object.freeze({ xFeet: 27, yFeet: 25.5 }),
+        widthFeet: 0.25,
+        heightFeet: 1,
+      }),
+      traversalRule: Object.freeze({ kind: "general" as const }),
+    }),
+  ]),
+});
+
 /** Shared field geometry consumed by both the engine adapter and preview. */
 export const NEUTRAL_ZONES: readonly Zone[] = Object.freeze([
   {
@@ -31,11 +53,6 @@ export const NEUTRAL_ZONES: readonly Zone[] = Object.freeze([
     kind: "score",
     tags: ["game-object"],
     shape: { type: "rectangle", center: { xFeet: 38, yFeet: 18 }, widthFeet: 6, heightFeet: 4 },
-  },
-  {
-    id: "field-divider",
-    kind: "non-traversal",
-    shape: { type: "rectangle", center: { xFeet: 27, yFeet: 25.5 }, widthFeet: 0.25, heightFeet: 1 },
   },
 ]);
 
@@ -79,6 +96,7 @@ export function createNeutralVisualizerPreview(
   });
   return Object.freeze({
     field: NEUTRAL_FIELD_PRESENTATION,
+    navGrid: NEUTRAL_NAV_GRID,
     zones: NEUTRAL_ZONES,
     rankingPointDefinitions: NEUTRAL_RANKING_POINT_DEFINITIONS,
     initialFrame,

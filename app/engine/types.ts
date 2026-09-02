@@ -1,5 +1,6 @@
 export const DEFAULT_TICK_SECONDS = 0.2;
 export const DRIVE_ACTION_ID = "drive-to";
+export const NAV_GRID_CELL_SIZE_INCHES = 0.5;
 
 export interface Point {
   readonly xFeet: number;
@@ -37,6 +38,25 @@ export interface Zone {
   readonly kind: ZoneKind;
   readonly shape: ZoneShape;
   readonly tags?: readonly string[];
+}
+
+export type NavGridTraversalRule =
+  | { readonly kind: "general" }
+  | { readonly kind: "feature-specific"; readonly requiredFeatureId: string };
+
+export interface NavGridNonTraversalZone {
+  readonly id: string;
+  readonly shape: CircleShape | RectangleShape;
+  readonly traversalRule: NavGridTraversalRule;
+}
+
+export interface NavGridDefinition {
+  readonly version: 1;
+  readonly seasonId: string;
+  readonly fieldWidthFeet: number;
+  readonly fieldHeightFeet: number;
+  readonly cellSizeInches: number;
+  readonly zones: readonly NavGridNonTraversalZone[];
 }
 
 export interface MatchTiming {
@@ -163,12 +183,13 @@ export interface GameDefinition {
   readonly actions?: readonly ActionDefinition[];
   readonly robotFeatures?: readonly RobotFeature[];
   readonly rankingPoints?: readonly RankingPointDefinition[];
+  readonly navGrid?: NavGridDefinition;
 }
 
 export type SimulationStatus = "running" | "awaiting-actions" | "blocked" | "complete";
 
 export interface SimulationBlock {
-  readonly code: "action-precondition" | "non-traversal-zone";
+  readonly code: "action-precondition" | "non-traversal-zone" | "path-not-found";
   readonly message: string;
   readonly actionId: string;
   readonly zoneId?: string;
@@ -210,6 +231,7 @@ export interface SimulationPlayback {
   readonly rankingPointDefinitions: readonly Required<RankingPointDefinition>[];
   readonly frames: readonly PlaybackFrame[];
   readonly events: readonly ActionEvent[];
+  readonly navGrid?: NavGridDefinition;
 }
 
 export interface SimulationOptions {

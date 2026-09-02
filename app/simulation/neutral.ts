@@ -11,6 +11,7 @@ import {
 import {
   NEUTRAL_FIELD_PRESENTATION,
   NEUTRAL_INITIAL_POSE,
+  NEUTRAL_NAV_GRID,
   NEUTRAL_RANKING_POINT_DEFINITIONS,
   NEUTRAL_ZONES,
 } from "./neutral-presentation.ts";
@@ -76,6 +77,7 @@ export function createNeutralGameDefinition(): GameDefinition {
   return {
     timing: { durationSeconds: 135, endgameDurationSeconds: 30 },
     gameObjectTypes: ["game-object"],
+    navGrid: NEUTRAL_NAV_GRID,
     zones: NEUTRAL_ZONES,
     actions: [waitAction, collectObject, scoreObject],
     robotFeatures: [

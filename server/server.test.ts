@@ -5,6 +5,7 @@ import { after, before, test } from "node:test";
 import { StrategyPlanner, type StrategyModelRequest } from "../app/llm/service.ts";
 import { SessionStore } from "../app/llm/session.ts";
 import { createLaunchpadServer } from "./index.ts";
+import { NEUTRAL_NAV_GRID } from "../app/simulation/neutral-presentation.ts";
 
 const SECRET = "sk-sentinel-never-return-this";
 let baseUrl = "";
@@ -127,6 +128,7 @@ test("configuration is isolated by an HttpOnly session and never echoed", async 
         translationSpeedFeetPerSecond: 15,
         spinSpeedRotationsPerSecond: 1,
       },
+      navGrid: NEUTRAL_NAV_GRID,
     }),
   });
   const generationText = await generated.text();
@@ -216,6 +218,7 @@ test("development simulations return exact ordered LLM traces", async () => {
           translationSpeedFeetPerSecond: 15,
           spinSpeedRotationsPerSecond: 1,
         },
+        navGrid: NEUTRAL_NAV_GRID,
       }),
     });
     assert.equal(generated.status, 200);

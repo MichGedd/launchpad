@@ -8,6 +8,7 @@ import type {
   SimulationPlayback,
   Zone,
 } from "../engine/types.ts";
+import { NAV_GRID_CELL_SIZE_INCHES } from "../engine/types.ts";
 import { shortestHeadingDelta } from "../engine/geometry.ts";
 import type {
   ReplayGenerationRequest,
@@ -16,6 +17,14 @@ import type {
 } from "./types.ts";
 
 const DEMO_FIELD = Object.freeze({ widthFeet: 54, heightFeet: 27 });
+const DEMO_NAV_GRID = Object.freeze({
+  version: 1 as const,
+  seasonId: "neutral",
+  fieldWidthFeet: DEMO_FIELD.widthFeet,
+  fieldHeightFeet: DEMO_FIELD.heightFeet,
+  cellSizeInches: NAV_GRID_CELL_SIZE_INCHES,
+  zones: Object.freeze([]),
+});
 const DEMO_RANKING_POINTS: readonly Required<RankingPointDefinition>[] = Object.freeze([
   { id: "collection", label: "Collection RP", value: 1 },
   { id: "scoring", label: "Scoring RP", value: 1 },
@@ -180,6 +189,7 @@ export async function createDemoReplay(request: ReplayGenerationRequest): Promis
   });
   return {
     field: DEMO_FIELD,
+    navGrid: request.navGrid ?? DEMO_NAV_GRID,
     playback,
   };
 }

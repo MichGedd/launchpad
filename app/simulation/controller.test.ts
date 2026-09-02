@@ -7,6 +7,7 @@ import {
   type StrategyModelRequest,
 } from "../llm/service.ts";
 import { createNeutralGameDefinition } from "./neutral.ts";
+import { NEUTRAL_NAV_GRID } from "./neutral-presentation.ts";
 import {
   runSimulationWithLlm,
   SimulationControllerError,
@@ -21,6 +22,7 @@ const input = {
     translationSpeedFeetPerSecond: 15,
     spinSpeedRotationsPerSecond: 1,
   },
+  navGrid: NEUTRAL_NAV_GRID,
 };
 const configuration = { model: "mock-model", reasoningEffort: "low" as const, apiKey: "not-used" };
 
@@ -59,7 +61,19 @@ test("development mock omits pickup and scoring actions when their features are 
   assert.equal(result.scene.playback.frames.at(-1)?.status, "complete");
 });
 
-test("feeds queue validation back to the LLM and replaces a blocked route", async () => {
+test("feeds queue validation and pathfinding failures back to the LLM", async () => {
+  const blockedNavGrid = {
+    version: 1 as const,
+    seasonId: "test",
+    fieldWidthFeet: 20,
+    fieldHeightFeet: 20,
+    cellSizeInches: 0.5,
+    zones: [{
+      id: "obstacle",
+      shape: { type: "rectangle" as const, center: { xFeet: 10, yFeet: 10 }, widthFeet: 1, heightFeet: 20 },
+      traversalRule: { kind: "general" as const },
+    }],
+  };
   const requests: StrategyModelRequest[] = [];
   let call = 0;
   const planner = new StrategyPlanner({
@@ -75,7 +89,7 @@ test("feeds queue validation back to the LLM and replaces a blocked route", asyn
         }
         if (call === 2) {
           return {
-            output: { summary: "blocked route", actions: [{ actionId: "drive-to", parameters: { xFeet: 10, yFeet: 0, headingRotations: 0 } }] },
+            output: { summary: "blocked route", actions: [{ actionId: "drive-to", parameters: { xFeet: 15, yFeet: 2, headingRotations: 0 } }] },
             usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2, cachedInputTokens: 0 },
           };
         }
@@ -84,9 +98,7 @@ test("feeds queue validation back to the LLM and replaces a blocked route", asyn
             summary: "recovery",
             actions: [{
               actionId: "drive-to",
-              parameters: call === 3
-                ? { xFeet: 0, yFeet: 10, headingRotations: 0 }
-                : { xFeet: 10, yFeet: 10, headingRotations: 0 },
+              parameters: { xFeet: 4, yFeet: 2, headingRotations: 0 },
             }],
           },
           usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2, cachedInputTokens: 0 },
@@ -97,20 +109,17 @@ test("feeds queue validation back to the LLM and replaces a blocked route", asyn
   const result = await runSimulationWithLlm({
     planner,
     configuration,
-    input: { ...input, selectedFeatureIds: [] },
+    input: { ...input, selectedFeatureIds: [], navGrid: blockedNavGrid },
     game: {
       ...createNeutralGameDefinition(),
-      timing: { durationSeconds: 1, endgameDurationSeconds: 0.2 },
-      zones: [{
-        id: "obstacle",
-        kind: "non-traversal",
-        shape: { type: "rectangle", center: { xFeet: 5, yFeet: 0 }, widthFeet: 1, heightFeet: 1 },
-      }],
+      timing: { durationSeconds: 0.1, endgameDurationSeconds: 0.02 },
+      zones: [],
+      navGrid: blockedNavGrid,
       actions: [],
       robotFeatures: [],
     },
     createRobotConfiguration: () => ({
-      initialPose: { xFeet: 0, yFeet: 0, headingRotations: 0 },
+      initialPose: { xFeet: 2, yFeet: 2, headingRotations: 0 },
       totalGameObjectCapacity: 0,
       widthFeet: 2.375,
       lengthFeet: 2.375,
@@ -122,8 +131,8 @@ test("feeds queue validation back to the LLM and replaces a blocked route", asyn
 
   assert.equal(result.scene.playback.frames.at(-1)?.status, "complete");
   assert.match(requests[1]?.prompt ?? "", /action-queue-validation/);
-  assert.match(requests[2]?.prompt ?? "", /non-traversal-zone/);
-  assert.equal(result.debugTrace?.length, 4);
+  assert.match(requests[2]?.prompt ?? "", /path-not-found/);
+  assert.equal(result.debugTrace?.length, 3);
 });
 
 test("rejects an action stream that makes no progress", async () => {

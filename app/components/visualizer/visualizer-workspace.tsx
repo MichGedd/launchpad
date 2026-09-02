@@ -13,6 +13,7 @@ import {
   RocketIcon,
   Settings2Icon,
   SparklesIcon,
+  MapIcon,
 } from "lucide-react";
 import {
   useEffect,
@@ -33,10 +34,12 @@ import {
   type VisualizerPreview,
   type VisualizerScene,
 } from "~/visualizer";
+import { clearStoredNavGrid, loadStoredNavGrid, storeNavGrid } from "~/visualizer/navgrid";
 
 import { FieldViewport } from "./field-viewport";
 import { ReplayDetails } from "./replay-details";
 import { RobotCustomizationDialog } from "./robot-customization-dialog";
+import { FieldEditorDialog } from "./field-editor-dialog";
 import { LlmConfigurationDialog } from "./llm-configuration-dialog";
 import { LlmInteractionsDialog } from "./llm-interactions-dialog";
 import { LlmStatisticsDialog } from "./llm-statistics-dialog";
@@ -78,6 +81,13 @@ function VisualizerWorkspace({
   const [robotCustomization, setRobotCustomization] = useState<RobotCustomization>(
     DEFAULT_ROBOT_CUSTOMIZATION,
   );
+  const [activeNavGrid, setActiveNavGrid] = useState(() =>
+    loadStoredNavGrid(
+      initialPreview.navGrid.seasonId,
+      initialPreview.navGrid,
+      features.map((feature) => feature.id),
+    ),
+  );
   const [scene, setScene] = useState<VisualizerScene | null>(null);
   const [currentTimeSeconds, setCurrentTimeSeconds] = useState(0);
   const [playbackSpeed, setPlaybackSpeed] = useState<(typeof PLAYBACK_SPEEDS)[number]>(1);
@@ -86,6 +96,7 @@ function VisualizerWorkspace({
   const [generationError, setGenerationError] = useState<string | null>(null);
   const [isFeatureRailCollapsed, setIsFeatureRailCollapsed] = useState(false);
   const [isRobotCustomizationOpen, setIsRobotCustomizationOpen] = useState(false);
+  const [isFieldEditorOpen, setIsFieldEditorOpen] = useState(false);
   const [llmConfiguration, setLlmConfiguration] = useState<LlmConfigurationStatus | null>(null);
   const [isLlmConfigurationOpen, setIsLlmConfigurationOpen] = useState(false);
   const [statistics, setStatistics] = useState<LlmStatistics | null>(null);
@@ -106,6 +117,7 @@ function VisualizerWorkspace({
         strategy,
         selectedFeatureIds,
         robotCustomization,
+        navGrid: activeNavGrid,
       });
       setScene(response.scene);
       setCurrentTimeSeconds(0);
@@ -195,6 +207,7 @@ function VisualizerWorkspace({
   const preview = useMemo<VisualizerPreview>(
     () => ({
       ...initialPreview,
+      navGrid: activeNavGrid,
       initialFrame: {
         ...initialPreview.initialFrame,
         robot: {
@@ -208,7 +221,7 @@ function VisualizerWorkspace({
         },
       },
     }),
-    [initialPreview, robotCustomization],
+    [activeNavGrid, initialPreview, robotCustomization],
   );
   const durationSeconds = scene?.playback.timing.durationSeconds ?? 0;
   const status = isGenerating ? "Generating" : frame?.status ?? "Ready";
@@ -388,6 +401,43 @@ function VisualizerWorkspace({
                 onOpenChange={setIsRobotCustomizationOpen}
                 onSave={setRobotCustomization}
                 open={isRobotCustomizationOpen}
+              />
+            </Dialog>
+            <Dialog onOpenChange={setIsFieldEditorOpen} open={isFieldEditorOpen}>
+              <DialogTrigger
+                render={
+                  <Button
+                    aria-label="Open field editor"
+                    className={`w-full rounded-xl ${isFeatureRailCollapsed ? "px-0" : "justify-start"}`}
+                    size={isFeatureRailCollapsed ? "icon" : "default"}
+                    title={isFeatureRailCollapsed ? "Field editor" : undefined}
+                    disabled={isGenerating}
+                    type="button"
+                    variant="ghost"
+                  />
+                }
+              >
+                <MapIcon aria-hidden="true" />
+                {isFeatureRailCollapsed ? null : "Field editor"}
+              </DialogTrigger>
+              <FieldEditorDialog
+                backgroundImage={preview.field.backgroundImage}
+                defaultNavGrid={initialPreview.navGrid}
+                features={features}
+                initialNavGrid={activeNavGrid}
+                meaningfulZones={preview.zones.filter((zone) => zone.kind === "pickup" || zone.kind === "score")}
+                onOpenChange={setIsFieldEditorOpen}
+                onSave={(grid, resetToDefault) => {
+                  setActiveNavGrid(grid);
+                  if (resetToDefault) clearStoredNavGrid(grid.seasonId);
+                  else storeNavGrid(grid);
+                  setScene(null);
+                  setCurrentTimeSeconds(0);
+                  setIsPlaying(false);
+                }}
+                open={isFieldEditorOpen}
+                robot={preview.initialFrame.robot}
+                selectedFeatureIds={selectedFeatureIds}
               />
             </Dialog>
           </aside>

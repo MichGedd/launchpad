@@ -11,6 +11,7 @@ export {
   createNeutralVisualizerPreview,
   NEUTRAL_FIELD_PRESENTATION,
   NEUTRAL_INITIAL_POSE,
+  NEUTRAL_NAV_GRID,
   NEUTRAL_RANKING_POINT_DEFINITIONS,
   NEUTRAL_ZONES,
 } from "./neutral-presentation.ts";
@@ -20,6 +21,7 @@ export {
   NEUTRAL_SIMULATION_FIELD,
 } from "./neutral.ts";
 export {
+  navGridDefinitionSchema,
   simulationGenerationRequestSchema,
   type SimulationGenerationRequest,
 } from "./schemas.ts";
