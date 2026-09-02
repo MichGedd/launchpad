@@ -1,5 +1,10 @@
-export { createZoneInteractionAction, zoneMatchesSelector } from "./actions.ts";
-export type { ZoneInteractionActionConfiguration, ZoneSelector } from "./actions.ts";
+export { createWaitAction, createZoneInteractionAction, zoneMatchesSelector } from "./actions.ts";
+export type {
+  WaitActionRequest,
+  WaitActionRuntimeState,
+  ZoneInteractionActionConfiguration,
+  ZoneSelector,
+} from "./actions.ts";
 export { SimulationEngine, createSimulation } from "./engine.ts";
 export {
   distanceBetweenShapes,

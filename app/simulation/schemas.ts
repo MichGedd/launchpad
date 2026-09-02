@@ -1,15 +1,18 @@
 import { z } from "zod";
 import { NAV_GRID_CELL_SIZE_INCHES, type NavGridDefinition } from "../engine/types.ts";
 import type { RobotCustomization } from "../visualizer/types.ts";
+import type { PolicyDefinition, JsonValue } from "../policy/index.ts";
 
 const finitePositiveNumber = z.number().finite().positive();
 
 export interface SimulationGenerationRequest {
-  readonly strategy: string;
+  readonly policy: PolicyDefinition;
   readonly selectedFeatureIds: readonly string[];
   readonly robotCustomization: RobotCustomization;
   readonly navGrid: NavGridDefinition;
 }
+
+export type PolicySimulationGenerationRequest = SimulationGenerationRequest;
 
 const pointSchema = z.object({
   xFeet: z.number().finite(),
@@ -30,6 +33,37 @@ const navGridShapeSchema = z.discriminatedUnion("type", [
     headingRotations: z.number().finite().optional(),
   }).strict(),
 ]);
+
+const jsonPrimitiveSchema = z.union([z.string(), z.number().finite(), z.boolean(), z.null()]);
+const jsonValueSchema: z.ZodType<JsonValue> = z.lazy(() => z.union([
+  jsonPrimitiveSchema,
+  z.array(jsonValueSchema),
+  z.record(z.string(), jsonValueSchema),
+]));
+const policyParametersSchema = z.record(z.string(), jsonValueSchema);
+const policyConditionSchema = z.object({
+  conditionId: z.string().trim().min(1).max(128),
+  parameters: policyParametersSchema,
+}).strict();
+const policyGoalSchema = z.object({
+  goalId: z.string().trim().min(1).max(128),
+  parameters: policyParametersSchema,
+}).strict();
+const policyRuleSchema = z.object({
+  id: z.string().min(1).max(128),
+  conditions: z.array(policyConditionSchema).max(8),
+  goal: policyGoalSchema,
+}).strict();
+const policyPhaseSchema = z.object({
+  rules: z.array(policyRuleSchema).max(32),
+  fallback: policyGoalSchema,
+}).strict();
+export const policyDefinitionSchema: z.ZodType<PolicyDefinition> = z.object({
+  version: z.literal(1),
+  name: z.string().trim().min(1).max(100),
+  match: policyPhaseSchema,
+  endgame: policyPhaseSchema,
+}).strict();
 
 const traversalRuleSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("general") }).strict(),
@@ -52,8 +86,8 @@ export const navGridDefinitionSchema: z.ZodType<NavGridDefinition> = z.object({
   }).strict()).max(1000),
 }).strict();
 
-export const simulationGenerationRequestSchema: z.ZodType<SimulationGenerationRequest> = z.object({
-  strategy: z.string().trim().min(1).max(4000),
+export const simulationGenerationRequestSchema: z.ZodType<PolicySimulationGenerationRequest> = z.object({
+  policy: policyDefinitionSchema,
   selectedFeatureIds: z.array(z.string().trim().min(1).max(128)).max(100),
   robotCustomization: z.object({
     widthFeet: finitePositiveNumber,

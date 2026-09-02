@@ -21,6 +21,7 @@ import {
   type ActionRequest,
   type ActionSummary,
   type DecisionState,
+  type DecisionReason,
   type GameDefinition,
   type MatchTiming,
   type MatchMetrics,
@@ -303,6 +304,8 @@ export class SimulationEngine {
   readonly #rankingPointDefinitions: readonly Required<RankingPointDefinition>[];
   readonly #timing: MatchTiming;
   readonly #tickSeconds: number;
+  readonly #interruptAtEndgameStart: boolean;
+  readonly #endgameStartSeconds: number;
   readonly #random: () => number;
   readonly #definitions = new Map<string, ActionDefinition<unknown, unknown>>();
   readonly #enabledActionIds = new Set<string>([DRIVE_ACTION_ID]);
@@ -319,6 +322,8 @@ export class SimulationEngine {
   #elapsedSeconds = 0;
   #remainingTickSeconds = 0;
   #status: SimulationStatus = "awaiting-actions";
+  #decisionReason: DecisionReason = "queue-empty";
+  #endgameStarted = false;
   #block: SimulationBlock | null = null;
 
   constructor(game: GameDefinition, robotConfiguration: RobotConfiguration, options: SimulationOptions = {}) {
@@ -333,6 +338,9 @@ export class SimulationEngine {
       throw new Error("Endgame duration must be finite and between zero and the match duration.");
     }
     this.#tickSeconds = finitePositive(options.tickSeconds ?? DEFAULT_TICK_SECONDS, "Tick duration");
+    this.#interruptAtEndgameStart = options.interruptAtEndgameStart ?? false;
+    this.#endgameStartSeconds = this.#timing.durationSeconds - this.#timing.endgameDurationSeconds;
+    this.#endgameStarted = this.#endgameStartSeconds <= TIME_EPSILON;
     this.#random = createSeededRandom(options.seed ?? 1);
     this.#recordPlayback = options.recordPlayback ?? false;
     this.#robot = validateRobot(robotConfiguration, game);
@@ -422,9 +430,19 @@ export class SimulationEngine {
     } else {
       this.#queue.push(...validated);
     }
-    if (this.#elapsedSeconds >= this.#timing.durationSeconds) this.#status = "complete";
-    else if (this.#block) this.#status = "blocked";
-    else this.#status = this.#active || this.#queue.length > 0 ? "running" : "awaiting-actions";
+    if (this.#elapsedSeconds >= this.#timing.durationSeconds) {
+      this.#status = "complete";
+      this.#decisionReason = "match-complete";
+    } else if (this.#block) {
+      this.#status = "blocked";
+      this.#decisionReason = "blocked";
+    } else if (this.#active || this.#queue.length > 0) {
+      this.#status = "running";
+      this.#decisionReason = "queue-empty";
+    } else {
+      this.#status = "awaiting-actions";
+      this.#decisionReason = "queue-empty";
+    }
     return { accepted: true, errors: [] };
   }
 
@@ -436,15 +454,30 @@ export class SimulationEngine {
     this.#status = "running";
 
     while (this.#remainingTickSeconds > TIME_EPSILON && this.#elapsedSeconds < this.#timing.durationSeconds) {
+      if (this.#interruptAtEndgameStart && !this.#endgameStarted
+          && this.#elapsedSeconds >= this.#endgameStartSeconds - TIME_EPSILON) {
+        this.#elapsedSeconds = this.#endgameStartSeconds;
+        this.#startEndgame();
+        break;
+      }
       this.#applyDueZoneRecycles();
       if (!this.#active && !this.#startNextAction()) break;
       if (this.#block !== null) break;
       if (!this.#active) continue;
       const nextRecycleTime = this.#scheduledZoneRecycles[0]?.timeSeconds;
+      const endgameBoundarySeconds = this.#interruptAtEndgameStart && !this.#endgameStarted
+        ? Math.max(0, this.#endgameStartSeconds - this.#elapsedSeconds)
+        : this.#remainingTickSeconds;
       const availableSeconds = nextRecycleTime === undefined
-        ? this.#remainingTickSeconds
-        : Math.min(this.#remainingTickSeconds, Math.max(0, nextRecycleTime - this.#elapsedSeconds));
+        ? Math.min(this.#remainingTickSeconds, endgameBoundarySeconds)
+        : Math.min(this.#remainingTickSeconds, endgameBoundarySeconds, Math.max(0, nextRecycleTime - this.#elapsedSeconds));
       if (availableSeconds <= TIME_EPSILON) {
+        if (this.#interruptAtEndgameStart && !this.#endgameStarted
+            && this.#elapsedSeconds >= this.#endgameStartSeconds - TIME_EPSILON) {
+          this.#elapsedSeconds = this.#endgameStartSeconds;
+          this.#startEndgame();
+          break;
+        }
         this.#applyDueZoneRecycles();
         continue;
       }
@@ -453,6 +486,12 @@ export class SimulationEngine {
         : this.#advanceCustom(this.#active!, availableSeconds);
       this.#consumeTime(consumed);
       this.#applyDueZoneRecycles();
+      if (this.#interruptAtEndgameStart && !this.#endgameStarted
+          && this.#elapsedSeconds >= this.#endgameStartSeconds - TIME_EPSILON) {
+        this.#elapsedSeconds = this.#endgameStartSeconds;
+        this.#startEndgame();
+        break;
+      }
       if (this.#block !== null) break;
       if (consumed <= TIME_EPSILON && this.#active) {
         throw new Error(`Action "${this.#active.actionId}" made no progress.`);
@@ -473,10 +512,13 @@ export class SimulationEngine {
       this.#active = null;
       this.#queue = [];
       this.#status = "complete";
+      this.#decisionReason = "match-complete";
       this.#events.push({ type: "simulation-complete", actionId: "engine", timeSeconds: this.#elapsedSeconds });
       if (this.#recordPlayback) this.#recordFrame();
-    } else if (this.#block === null && !this.#active && this.#queue.length === 0) {
+    } else if (this.#block === null && !this.#active && this.#queue.length === 0
+        && this.#decisionReason !== "endgame-start") {
       this.#status = "awaiting-actions";
+      this.#decisionReason = "queue-empty";
     }
     if (this.#remainingTickSeconds <= TIME_EPSILON) {
       this.#remainingTickSeconds = 0;
@@ -516,6 +558,7 @@ export class SimulationEngine {
           message: "No traversable path exists between the robot and the requested drive destination.",
         };
         this.#status = "blocked";
+        this.#decisionReason = "blocked";
         this.#events.push({ type: "action-blocked", actionId: next.actionId, timeSeconds: this.#elapsedSeconds });
         return false;
       }
@@ -561,6 +604,7 @@ export class SimulationEngine {
         message: start.reason,
       };
       this.#status = "blocked";
+      this.#decisionReason = "blocked";
       this.#events.push({ type: "action-blocked", actionId: next.actionId, timeSeconds: this.#elapsedSeconds });
       return false;
     }
@@ -586,6 +630,7 @@ export class SimulationEngine {
         message: `Drive contacted non-traversal zone "${collision.zone.id}". Pathfinding is not enabled.`,
       };
       this.#status = "blocked";
+      this.#decisionReason = "blocked";
       this.#events.push({
         type: "action-blocked",
         actionId: action.actionId,
@@ -926,6 +971,28 @@ export class SimulationEngine {
     this.#remainingTickSeconds = Math.max(0, this.#remainingTickSeconds - seconds);
   }
 
+  #startEndgame(): void {
+    if (this.#endgameStarted || this.#endgameStartSeconds >= this.#timing.durationSeconds - TIME_EPSILON) return;
+    this.#endgameStarted = true;
+    this.#remainingTickSeconds = 0;
+    if (this.#active) {
+      this.#events.push({
+        type: "action-interrupted",
+        actionId: this.#active.actionId,
+        timeSeconds: this.#elapsedSeconds,
+        details: { reason: "endgame-start" },
+      });
+    }
+    this.#active = null;
+    this.#queue = [];
+    this.#block = null;
+    this.#events.push({ type: "queued-actions-cleared", actionId: "engine", timeSeconds: this.#elapsedSeconds });
+    this.#events.push({ type: "endgame-started", actionId: "engine", timeSeconds: this.#elapsedSeconds });
+    this.#status = "awaiting-actions";
+    this.#decisionReason = "endgame-start";
+    if (this.#recordPlayback) this.#recordFrame();
+  }
+
   #actionContext(): ActionContext {
     const robot = cloneRobot(this.#robot);
     return {
@@ -934,6 +1001,8 @@ export class SimulationEngine {
       zones: this.#game.zones,
       zoneStates: cloneZoneStates(this.#zoneStates),
       elapsedSeconds: this.#elapsedSeconds,
+      timeRemainingSeconds: Math.max(0, this.#timing.durationSeconds - this.#elapsedSeconds),
+      endgameActive: this.#elapsedSeconds >= this.#endgameStartSeconds,
       random: this.#random,
       robotContactsZone: (zone) => robotContactsZone(robot, zone),
     };
@@ -996,6 +1065,7 @@ export class SimulationEngine {
       elapsedSeconds: this.#elapsedSeconds,
       timeRemainingSeconds: Math.max(0, this.#timing.durationSeconds - this.#elapsedSeconds),
       endgameActive: this.#elapsedSeconds >= this.#timing.durationSeconds - this.#timing.endgameDurationSeconds,
+      decisionReason: this.#decisionReason,
       robot: cloneRobot(this.#robot),
       metrics: cloneMetrics(this.#metrics),
       activeAction: this.#active ? cloneSummary(this.#active) : null,

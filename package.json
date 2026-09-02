@@ -14,7 +14,7 @@
     "dev": "node --experimental-strip-types server/index.ts",
     "setup": "npm ci && npm start",
     "start": "node --experimental-strip-types server/index.ts",
-    "test": "node --experimental-strip-types --test app/engine/*.test.ts app/visualizer/*.test.ts app/llm/*.test.ts app/simulation/*.test.ts server/*.test.ts",
+    "test": "node --experimental-strip-types --test app/engine/*.test.ts app/visualizer/*.test.ts app/components/visualizer/*.test.ts app/llm/*.test.ts app/policy/*.test.ts app/simulation/*.test.ts server/*.test.ts",
     "typecheck": "react-router typegen && tsc --noEmit"
   },
   "dependencies": {

@@ -5,10 +5,11 @@ import {
   GaugeIcon,
   InfoIcon,
   LoaderCircleIcon,
-  BarChart3Icon,
   PauseIcon,
   PinIcon,
   PlayIcon,
+  ListTreeIcon,
+  PencilIcon,
   RotateCcwIcon,
   RocketIcon,
   Settings2Icon,
@@ -24,6 +25,7 @@ import {
 import { ThemeMenu } from "~/components/theme-menu";
 import { Button } from "~/components/ui/button";
 import { Dialog, DialogTrigger } from "~/components/ui/dialog";
+import type { PolicyDecisionTrace, PolicyDefinition } from "~/policy";
 import {
   clampPlaybackTime,
   interpolatePlaybackFrame,
@@ -37,34 +39,22 @@ import {
 import { clearStoredNavGrid, loadStoredNavGrid, storeNavGrid } from "~/visualizer/navgrid";
 import {
   simulationGenerationInputFingerprint,
-  type SimulationDebugTrace,
   type SimulationGenerationInputs,
 } from "~/simulation";
+import { DEFAULT_NEUTRAL_POLICY, generateSimulation } from "~/simulation";
 
 import { FieldViewport } from "./field-viewport";
 import { ReplayDetails } from "./replay-details";
 import { RobotCustomizationDialog } from "./robot-customization-dialog";
 import { FieldEditorDialog } from "./field-editor-dialog";
-import { LlmConfigurationDialog } from "./llm-configuration-dialog";
-import { LlmInteractionsDialog } from "./llm-interactions-dialog";
-import { LlmStatisticsDialog } from "./llm-statistics-dialog";
-import {
-  disconnectLlm,
-  generateSimulation,
-  getLlmConfiguration,
-  getLlmStatistics,
-  saveLlmConfiguration,
-  type LlmConfigurationRequest,
-  type LlmConfigurationStatus,
-  type LlmStatistics,
-} from "~/llm/client";
+import { PolicyDecisionsDialog } from "./policy-decisions-dialog";
+import { PolicyEditorDialog } from "./policy-editor-dialog";
 
 const PLAYBACK_SPEEDS = [0.5, 1, 2] as const;
 
 interface VisualizerWorkspaceProps {
   readonly features: readonly RobotFeatureOption[];
   readonly initialPreview: VisualizerPreview;
-  readonly initialStrategy: string;
 }
 
 function formatTime(timeSeconds: number) {
@@ -76,9 +66,8 @@ function formatTime(timeSeconds: number) {
 function VisualizerWorkspace({
   features,
   initialPreview,
-  initialStrategy,
 }: VisualizerWorkspaceProps) {
-  const [strategy, setStrategy] = useState(initialStrategy);
+  const [policy, setPolicy] = useState<PolicyDefinition>(() => structuredClone(DEFAULT_NEUTRAL_POLICY));
   const [selectedFeatureIds, setSelectedFeatureIds] = useState<readonly string[]>(
     features.map((feature) => feature.id),
   );
@@ -101,24 +90,20 @@ function VisualizerWorkspace({
   const [isFeatureRailCollapsed, setIsFeatureRailCollapsed] = useState(false);
   const [isRobotCustomizationOpen, setIsRobotCustomizationOpen] = useState(false);
   const [isFieldEditorOpen, setIsFieldEditorOpen] = useState(false);
-  const [llmConfiguration, setLlmConfiguration] = useState<LlmConfigurationStatus | null>(null);
-  const [isLlmConfigurationOpen, setIsLlmConfigurationOpen] = useState(false);
-  const [statistics, setStatistics] = useState<LlmStatistics | null>(null);
-  const [isStatisticsOpen, setIsStatisticsOpen] = useState(false);
-  const [debugTrace, setDebugTrace] = useState<readonly SimulationDebugTrace[]>([]);
-  const [isDebugTraceOpen, setIsDebugTraceOpen] = useState(false);
+  const [isPolicyEditorOpen, setIsPolicyEditorOpen] = useState(false);
+  const [policyTrace, setPolicyTrace] = useState<readonly PolicyDecisionTrace[]>([]);
+  const [isPolicyDecisionsOpen, setIsPolicyDecisionsOpen] = useState(false);
   const [isTimelinePinned, setIsTimelinePinned] = useState(false);
   const simulationInputs = useMemo<SimulationGenerationInputs>(
     () => ({
       request: {
-        strategy,
+        policy,
         selectedFeatureIds,
         robotCustomization,
         navGrid: activeNavGrid,
       },
-      llmConfiguration,
     }),
-    [activeNavGrid, llmConfiguration, robotCustomization, selectedFeatureIds, strategy],
+    [activeNavGrid, policy, robotCustomization, selectedFeatureIds],
   );
   const currentInputFingerprint = useMemo(
     () => simulationGenerationInputFingerprint(simulationInputs),
@@ -131,19 +116,19 @@ function VisualizerWorkspace({
     || lastGeneratedInputFingerprint !== currentInputFingerprint;
 
   async function handleGenerate() {
-    if (!llmConfiguration?.configured || isGenerating) return;
+    if (isGenerating) return;
     setIsGenerating(true);
     setGenerationError(null);
     setIsPlaying(false);
-    setDebugTrace([]);
+    setPolicyTrace([]);
 
     try {
       const response = await generateSimulation(simulationInputs.request);
       setScene(response.scene);
       setCurrentTimeSeconds(0);
       setLastGeneratedInputFingerprint(currentInputFingerprint);
-      if (response.statistics) setStatistics(response.statistics);
-      setDebugTrace(response.debugTrace ?? []);
+      setPolicy(response.policy);
+      setPolicyTrace(response.policyTrace);
     } catch (error) {
       setGenerationError(
         error instanceof Error
@@ -154,41 +139,6 @@ function VisualizerWorkspace({
       setIsGenerating(false);
     }
   }
-
-  async function handleSaveLlmConfiguration(nextConfiguration: LlmConfigurationRequest) {
-    setLlmConfiguration(await saveLlmConfiguration(nextConfiguration));
-  }
-
-  async function handleDisconnectLlm() {
-    await disconnectLlm();
-    setLlmConfiguration({
-      configured: false,
-      model: "gpt-5.6-luna",
-      provider: "openai",
-      reasoningEffort: "low",
-    });
-    setStatistics(null);
-    setDebugTrace([]);
-  }
-
-  async function openStatistics() {
-    setIsStatisticsOpen(true);
-    try {
-      setStatistics(await getLlmStatistics());
-    } catch {
-      // The empty state remains useful while the session has no recorded requests.
-    }
-  }
-
-  useEffect(() => {
-    let active = true;
-    void getLlmConfiguration().then((configuration) => {
-      if (active) setLlmConfiguration(configuration);
-    });
-    return () => {
-      active = false;
-    };
-  }, []);
 
   useEffect(() => {
     if (!isPlaying || scene === null) return;
@@ -297,41 +247,34 @@ function VisualizerWorkspace({
           event.preventDefault();
           void handleGenerate();
         }}>
-          <label className="sr-only" htmlFor="strategy-input">Strategy</label>
-          <textarea
-            className="h-[clamp(52px,7.5vh,64px)] w-full resize-none rounded-2xl border border-white/10 bg-black/10 px-4 py-3 text-sm leading-6 text-foreground outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:bg-black/20 disabled:text-muted-foreground dark:bg-black/15"
-            disabled={llmConfiguration === null || !llmConfiguration.configured || isGenerating}
-            id="strategy-input"
-            onChange={(event) => setStrategy(event.target.value)}
-            placeholder={llmConfiguration?.configured ? "Describe how the robot should move and act during the match…" : "Please configure your LLM"}
-            value={strategy}
-          />
-          <div className="mt-2 flex items-center justify-between gap-4 px-1">
-            <p aria-live="polite" className={`text-xs ${generationError ? "text-red-300" : "text-muted-foreground"}`}>
-              {generationError ?? (llmConfiguration?.configured ? "Describe a strategy for ChatGPT to turn into an action plan." : "Configure ChatGPT to generate a strategy plan.")}
-            </p>
+          <div className="flex flex-wrap items-end justify-between gap-4 px-1">
+            <div className="min-w-[240px] flex-1">
+              <label className="text-xs font-medium" htmlFor="policy-name-input">Policy name</label>
+              <input
+                className="mt-1.5 h-10 w-full rounded-xl border border-white/10 bg-black/10 px-3 text-sm text-foreground outline-none focus-visible:ring-3 focus-visible:ring-[#6e8ce1]/45 dark:bg-black/15"
+                disabled={isGenerating}
+                id="policy-name-input"
+                maxLength={100}
+                onChange={(event) => setPolicy((current) => ({ ...current, name: event.target.value }))}
+                value={policy.name}
+              />
+              <p className="mt-1 text-xs text-muted-foreground">
+                {policy.match.rules.length} match rules · {policy.endgame.rules.length} endgame rules · ordered deterministic goals
+              </p>
+            </div>
             <div className="flex items-center gap-2">
-              <Dialog onOpenChange={setIsLlmConfigurationOpen} open={isLlmConfigurationOpen}>
-                <DialogTrigger render={<Button className="h-10 rounded-xl px-3 text-sm" disabled={isGenerating} type="button" variant="ghost" />}>
-                  <Settings2Icon aria-hidden="true" />
-                  Configure
-                </DialogTrigger>
-                <LlmConfigurationDialog
-                  configuration={llmConfiguration}
-                  onDisconnect={handleDisconnectLlm}
-                  onOpenChange={setIsLlmConfigurationOpen}
-                  onSave={handleSaveLlmConfiguration}
-                  open={isLlmConfigurationOpen}
-                />
-              </Dialog>
-              <Button aria-label="Report statistics" className="h-10 rounded-xl px-3 text-sm" onClick={() => void openStatistics()} type="button" variant="ghost">
-                <BarChart3Icon aria-hidden="true" />
-                Report Statistics
+              <Button aria-label="Edit policy" className="h-10 rounded-xl px-3 text-sm" disabled={isGenerating} onClick={() => setIsPolicyEditorOpen(true)} type="button" variant="ghost">
+                <PencilIcon aria-hidden="true" />
+                Edit policy
+              </Button>
+              <Button aria-label="View policy decisions" className="h-10 rounded-xl px-3 text-sm" disabled={policyTrace.length === 0 || isGenerating} onClick={() => setIsPolicyDecisionsOpen(true)} type="button" variant="ghost">
+                <ListTreeIcon aria-hidden="true" />
+                Policy decisions
               </Button>
               <Button
                 aria-label={simulationNeedsGeneration ? "Generate updated simulation" : "Generate simulation"}
                 className={`h-10 rounded-xl px-4 text-sm shadow-lg shadow-orange-950/20 ${simulationNeedsGeneration ? "generate-button-stale" : ""}`}
-                disabled={llmConfiguration === null || !llmConfiguration.configured || isGenerating}
+                disabled={isGenerating}
                 type="submit"
               >
                 {isGenerating ? <LoaderCircleIcon aria-hidden="true" className="animate-spin" /> : <SparklesIcon aria-hidden="true" />}
@@ -339,6 +282,9 @@ function VisualizerWorkspace({
               </Button>
             </div>
           </div>
+          <p aria-live="polite" className={`mt-2 px-1 text-xs ${generationError ? "text-red-300" : "text-muted-foreground"}`}>
+            {generationError ?? "Edit the ordered policy rules, then generate a deterministic simulation."}
+          </p>
         </form>
 
         <div className="flex min-h-0 flex-1 gap-4">
@@ -585,27 +531,22 @@ function VisualizerWorkspace({
         </div>
       </div>
 
-      <Dialog onOpenChange={setIsStatisticsOpen} open={isStatisticsOpen}>
-        <LlmStatisticsDialog
-          footerAction={import.meta.env.DEV ? (
-            <Dialog onOpenChange={setIsDebugTraceOpen} open={isDebugTraceOpen}>
-              <DialogTrigger
-                render={
-                  <Button
-                    className="rounded-xl"
-                    disabled={debugTrace.length === 0 || isGenerating}
-                    type="button"
-                    variant="outline"
-                  />
-                }
-              >
-                LLM interactions{debugTrace.length > 0 ? ` · ${debugTrace.length}` : ""}
-              </DialogTrigger>
-              <LlmInteractionsDialog traces={debugTrace} />
-            </Dialog>
-          ) : undefined}
-          statistics={statistics}
+      <Dialog onOpenChange={setIsPolicyEditorOpen} open={isPolicyEditorOpen}>
+        <PolicyEditorDialog
+          onOpenChange={setIsPolicyEditorOpen}
+          onSave={(nextPolicy) => {
+            setPolicy(nextPolicy);
+            setScene(null);
+            setCurrentTimeSeconds(0);
+            setIsPlaying(false);
+            setPolicyTrace([]);
+          }}
+          open={isPolicyEditorOpen}
+          policy={policy}
         />
+      </Dialog>
+      <Dialog onOpenChange={setIsPolicyDecisionsOpen} open={isPolicyDecisionsOpen}>
+        <PolicyDecisionsDialog traces={policyTrace} />
       </Dialog>
     </main>
   );

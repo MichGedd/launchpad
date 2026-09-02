@@ -178,6 +178,8 @@ export interface ActionContext {
   readonly zones: readonly Zone[];
   readonly zoneStates: ZoneGameObjectStates;
   readonly elapsedSeconds: number;
+  readonly timeRemainingSeconds: number;
+  readonly endgameActive: boolean;
   readonly random: () => number;
   readonly robotContactsZone: (zone: Zone) => boolean;
 }
@@ -250,6 +252,7 @@ export interface DecisionState {
   readonly elapsedSeconds: number;
   readonly timeRemainingSeconds: number;
   readonly endgameActive: boolean;
+  readonly decisionReason: DecisionReason;
   readonly robot: RobotState;
   readonly metrics: MatchMetrics;
   readonly activeAction: ActionSummary | null;
@@ -284,7 +287,11 @@ export interface SimulationOptions {
   readonly seed?: number;
   readonly recordPlayback?: boolean;
   readonly tickSeconds?: number;
+  /** Interrupt queued and active actions at the exact start of endgame. */
+  readonly interruptAtEndgameStart?: boolean;
 }
+
+export type DecisionReason = "queue-empty" | "blocked" | "endgame-start" | "match-complete";
 
 export const DEFAULT_MATCH_TIMING: MatchTiming = {
   durationSeconds: 135,

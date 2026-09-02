@@ -40,6 +40,7 @@ test("runs the neutral match through multiple LLM decisions and records optional
   assert.deepEqual(finalFrame.zoneStates, {
     "collection-area": { kind: "pickup", availableGameObjectCount: 0 },
     "scoring-area": { kind: "score", scoredGameObjectCount: 2 },
+    "endgame-parking-area": { kind: "score", scoredGameObjectCount: 0 },
   });
   assert.equal(finalFrame.metrics.rankingPoints.collection?.earned, true);
   assert.equal(finalFrame.metrics.rankingPoints.scoring?.earned, true);

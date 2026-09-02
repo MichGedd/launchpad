@@ -6,6 +6,7 @@ import { StrategyPlanner, type StrategyModelRequest } from "../app/llm/service.t
 import { SessionStore } from "../app/llm/session.ts";
 import { createLaunchpadServer } from "./index.ts";
 import { NEUTRAL_NAV_GRID } from "../app/simulation/neutral-presentation.ts";
+import { DEFAULT_NEUTRAL_POLICY } from "../app/simulation/neutral-policy.ts";
 
 const SECRET = "sk-sentinel-never-return-this";
 let baseUrl = "";
@@ -112,6 +113,29 @@ test("configuration is isolated by an HttpOnly session and never echoed", async 
   const separateBrowser = await fetch(`${baseUrl}/api/llm/configuration`);
   assert.equal((await separateBrowser.json()).configured, false);
 
+  const deterministicWithoutSession = await fetch(`${baseUrl}/api/simulation`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Origin: baseUrl },
+    body: JSON.stringify({
+      policy: {
+        version: 1,
+        name: "No session policy",
+        match: { rules: [], fallback: { goalId: "wait-until-match-end", parameters: {} } },
+        endgame: { rules: [], fallback: { goalId: "wait-until-match-end", parameters: {} } },
+      },
+      selectedFeatureIds: [],
+      robotCustomization: {
+        widthFeet: 2,
+        lengthFeet: 2,
+        translationSpeedFeetPerSecond: 15,
+        spinSpeedRotationsPerSecond: 1,
+      },
+      navGrid: NEUTRAL_NAV_GRID,
+    }),
+  });
+  assert.equal(deterministicWithoutSession.status, 200);
+  assert.equal(deterministicWithoutSession.headers.get("set-cookie"), null);
+
   const generated = await fetch(`${baseUrl}/api/simulation`, {
     method: "POST",
     headers: {
@@ -120,8 +144,8 @@ test("configuration is isolated by an HttpOnly session and never echoed", async 
       Origin: baseUrl,
     },
     body: JSON.stringify({
-      strategy: "Drive to the target.",
-      selectedFeatureIds: ["drive-planning", "object-intake", "goal-scoring"],
+      policy: DEFAULT_NEUTRAL_POLICY,
+      selectedFeatureIds: ["drive-planning", "object-intake", "goal-scoring", "endgame-parking"],
       robotCustomization: {
         widthFeet: 2,
         lengthFeet: 2,
@@ -137,17 +161,12 @@ test("configuration is isolated by an HttpOnly session and never echoed", async 
   const generation = JSON.parse(generationText);
   assert.equal(generation.scene.playback.frames.at(-1).status, "complete");
   assert.equal(generation.scene.playback.timing.durationSeconds, 135);
-  assert.equal(generation.scene.playback.frames.at(-1).metrics.points, 24);
-  assert.deepEqual(generation.scene.playback.frames.at(-1).robot.inventory, { "game-object": 0 });
-  assert.equal(generation.statistics.latestGeneration.decisions, capturedRequests.length);
-  assert.ok(capturedRequests.length >= 3);
-  assert.equal(generation.statistics.latestGeneration.cachedInputTokens, 25 * capturedRequests.length);
-  assert.equal(generation.statistics.sessionTotal.totalTokens, 120 * capturedRequests.length);
+  assert.ok(generation.decisionCount > 0);
+  assert.equal(generation.policy.name, DEFAULT_NEUTRAL_POLICY.name);
+  assert.equal(generation.policyTrace.length, generation.decisionCount);
+  assert.equal("statistics" in generation, false);
   assert.equal("debugTrace" in generation, false);
-  for (const capturedRequest of capturedRequests) {
-    assert.doesNotMatch(capturedRequest.system, /sentinel|apiKey|sk-/i);
-    assert.doesNotMatch(capturedRequest.prompt, /sentinel|apiKey|sk-/i);
-  }
+  assert.equal(capturedRequests.length, 0);
 
   const disconnected = await fetch(`${baseUrl}/api/llm/configuration`, {
     method: "DELETE",
@@ -210,7 +229,10 @@ test("development simulations return exact ordered LLM traces", async () => {
       method: "POST",
       headers: { "Content-Type": "application/json", Cookie: cookie, Origin: developmentUrl },
       body: JSON.stringify({
-        strategy: "Exercise multiple decisions.",
+        policy: {
+          ...DEFAULT_NEUTRAL_POLICY,
+          name: "Exercise multiple decisions",
+        },
         selectedFeatureIds: ["drive-planning", "object-intake", "goal-scoring"],
         robotCustomization: {
           widthFeet: 2,
@@ -223,18 +245,9 @@ test("development simulations return exact ordered LLM traces", async () => {
     });
     assert.equal(generated.status, 200);
     const payload = await generated.json();
-    assert.equal(payload.debugTrace.length, requests.length);
-    assert.ok(payload.debugTrace.length >= 3);
-    assert.deepEqual(
-      payload.debugTrace.map((trace: { response: { actions: readonly unknown[] } }) => trace.response.actions.length),
-      [2, 3, 4, 1],
-    );
-    payload.debugTrace.forEach((trace: Record<string, unknown>, index: number) => {
-      assert.equal(trace.decisionNumber, index + 1);
-      assert.equal(trace.system, requests[index].system);
-      assert.equal(trace.prompt, requests[index].prompt);
-      assert.doesNotMatch(JSON.stringify(trace), /sentinel|apiKey|sk-/i);
-    });
+    assert.ok(payload.decisionCount > 0);
+    assert.equal(payload.policyTrace.length, payload.decisionCount);
+    assert.equal(requests.length, 0);
   } finally {
     await new Promise<void>((resolve, reject) => {
       server.close((error) => error ? reject(error) : resolve());
@@ -262,4 +275,34 @@ test("mutation endpoints reject missing and cross-origin requests", async () => 
     body,
   });
   assert.equal(wrongOrigin.status, 403);
+
+  const malformedSimulation = await fetch(`${baseUrl}/api/simulation`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Origin: baseUrl },
+    body: JSON.stringify({ policy: DEFAULT_NEUTRAL_POLICY }),
+  });
+  assert.equal(malformedSimulation.status, 400);
+
+  const validSimulationBody = JSON.stringify({
+    policy: {
+      version: 1,
+      name: "Same-origin policy",
+      match: { rules: [], fallback: { goalId: "wait-until-match-end", parameters: {} } },
+      endgame: { rules: [], fallback: { goalId: "wait-until-match-end", parameters: {} } },
+    },
+    selectedFeatureIds: [],
+    robotCustomization: {
+      widthFeet: 2,
+      lengthFeet: 2,
+      translationSpeedFeetPerSecond: 15,
+      spinSpeedRotationsPerSecond: 1,
+    },
+    navGrid: NEUTRAL_NAV_GRID,
+  });
+  const missingSimulationOrigin = await fetch(`${baseUrl}/api/simulation`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: validSimulationBody,
+  });
+  assert.equal(missingSimulationOrigin.status, 403);
 });

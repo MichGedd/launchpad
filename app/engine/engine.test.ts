@@ -96,6 +96,50 @@ describe("drive action and simulation timing", () => {
     assertClose(state.timeRemainingSeconds, 0);
     assertClose(state.robot.pose.xFeet, 1);
     assert.equal(state.activeAction, null);
+    assert.equal(state.decisionReason, "match-complete");
+  });
+
+  test("optionally interrupts an active action exactly at the endgame boundary", () => {
+    const game: GameDefinition = {
+      ...EMPTY_GAME,
+      timing: { durationSeconds: 2, endgameDurationSeconds: 1 },
+    };
+    const simulation = createSimulation(game, robot({ translationSpeedFeetPerSecond: 1 }), {
+      tickSeconds: 0.75,
+      recordPlayback: true,
+      interruptAtEndgameStart: true,
+    });
+    simulation.queueActions([drive(10, 0), drive(20, 0)]);
+    const state = simulation.runUntilDecision();
+
+    assert.equal(state.status, "awaiting-actions");
+    assert.equal(state.decisionReason, "endgame-start");
+    assertClose(state.elapsedSeconds, 1);
+    assertClose(state.timeRemainingSeconds, 1);
+    assert.equal(state.endgameActive, true);
+    assertClose(state.robot.pose.xFeet, 1);
+    assert.equal(state.activeAction, null);
+    assert.deepEqual(state.queuedActions, []);
+
+    const playback = simulation.exportPlayback()!;
+    const boundaryFrame = playback.frames.find((frame) => frame.timeSeconds === 1);
+    assert.equal(boundaryFrame?.status, "awaiting-actions");
+    assert.deepEqual(
+      playback.events.filter((event) => event.timeSeconds === 1).map((event) => event.type),
+      ["action-interrupted", "queued-actions-cleared", "endgame-started"],
+    );
+  });
+
+  test("keeps boundary crossing behavior disabled by default", () => {
+    const simulation = createSimulation({
+      ...EMPTY_GAME,
+      timing: { durationSeconds: 2, endgameDurationSeconds: 1 },
+    }, robot({ translationSpeedFeetPerSecond: 1 }), { tickSeconds: 0.75, recordPlayback: true });
+    simulation.queueActions([drive(10, 0)]);
+    const state = simulation.runUntilDecision();
+    assert.equal(state.status, "complete");
+    assert.equal(state.decisionReason, "match-complete");
+    assert.equal(simulation.exportPlayback()!.events.some((event) => event.type === "endgame-started"), false);
   });
 });
 

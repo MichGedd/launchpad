@@ -1,4 +1,4 @@
-import { createZoneInteractionAction } from "../engine/actions.ts";
+import { createWaitAction, createZoneInteractionAction } from "../engine/actions.ts";
 import type {
   ActionDefinition,
   GameDefinition,
@@ -17,6 +17,7 @@ import {
 } from "./neutral-presentation.ts";
 
 const CONTROLLER_FEATURE_ID = "__launchpad-controller-basics";
+export const ENDGAME_PARKING_ACTION_ID = "park";
 
 /** Backward-compatible name used by the simulation controller. */
 export const NEUTRAL_SIMULATION_FIELD = NEUTRAL_FIELD_PRESENTATION;
@@ -27,29 +28,7 @@ export const NEUTRAL_SIMULATION_FIELD = NEUTRAL_FIELD_PRESENTATION;
  * scoring, and movement interactions.
  */
 export function createNeutralGameDefinition(): GameDefinition {
-  const waitAction: ActionDefinition<{ readonly durationSeconds: number }, { readonly elapsedSeconds: number }> = {
-    metadata: { id: "wait", description: "Wait without moving for a specified duration." },
-    validate(parameters) {
-      if (typeof parameters !== "object" || parameters === null || Array.isArray(parameters)) {
-        return { valid: false, message: "Wait parameters must include durationSeconds." };
-      }
-      const durationSeconds = (parameters as { readonly durationSeconds?: unknown }).durationSeconds;
-      if (typeof durationSeconds !== "number" || !Number.isFinite(durationSeconds) || durationSeconds < 0) {
-        return { valid: false, message: "durationSeconds must be a finite, non-negative number." };
-      }
-      return { valid: true, value: { durationSeconds } };
-    },
-    start: () => ({ ready: true, state: { elapsedSeconds: 0 } }),
-    advance(_context, request, state, availableSeconds) {
-      const consumedSeconds = Math.min(availableSeconds, Math.max(0, request.durationSeconds - state.elapsedSeconds));
-      const elapsedSeconds = state.elapsedSeconds + consumedSeconds;
-      return {
-        state: { elapsedSeconds },
-        consumedSeconds,
-        complete: elapsedSeconds >= request.durationSeconds,
-      };
-    },
-  };
+  const waitAction = createWaitAction();
   const collectObject = createZoneInteractionAction({
     id: "collect-object",
     description: "Collect one game object while contacting the pickup area.",
@@ -73,20 +52,73 @@ export function createNeutralGameDefinition(): GameDefinition {
     rankingPointProgressDeltaOnSuccess: { scoring: 1 },
     successEventType: "object-scored",
   });
+  const parkAction: ActionDefinition<Record<string, never>, { readonly elapsedSeconds: number }> = {
+    metadata: {
+      id: ENDGAME_PARKING_ACTION_ID,
+      description: "Park in an endgame parking area.",
+      zoneIds: ["endgame-parking-area"],
+    },
+    validate(parameters) {
+      if (typeof parameters !== "object" || parameters === null || Array.isArray(parameters)
+          || Object.keys(parameters).length > 0) {
+        return { valid: false, message: "Park parameters must be an empty object." };
+      }
+      return { valid: true, value: {} };
+    },
+    start(context) {
+      if (!context.endgameActive) {
+        return { ready: false, reason: "Parking is available only after endgame starts." };
+      }
+      const parkingZone = context.zones.find((zone) => zone.tags?.includes("endgame-parking")
+        && context.robotContactsZone(zone));
+      if (!parkingZone) {
+        return { ready: false, reason: "Robot is not contacting an endgame parking area." };
+      }
+      return { ready: true, state: { elapsedSeconds: 0 } };
+    },
+    advance(_context, _request, state, availableSeconds) {
+      const durationSeconds = 0.5;
+      const consumedSeconds = Math.min(availableSeconds, Math.max(0, durationSeconds - state.elapsedSeconds));
+      const elapsedSeconds = state.elapsedSeconds + consumedSeconds;
+      const complete = elapsedSeconds >= durationSeconds;
+      return {
+        state: { elapsedSeconds },
+        consumedSeconds,
+        complete,
+        pointsDelta: complete ? 2 : undefined,
+        rankingPointProgressDelta: complete ? { endgame: 1 } : undefined,
+        events: complete ? [{ type: "parked" }] : undefined,
+      };
+    },
+  };
 
   return {
     timing: { durationSeconds: 135, endgameDurationSeconds: 30 },
     gameObjectTypes: ["game-object"],
     navGrid: NEUTRAL_NAV_GRID,
     zones: NEUTRAL_ZONES,
-    actions: [waitAction, collectObject, scoreObject],
+    actions: [waitAction, collectObject, scoreObject, parkAction],
     robotFeatures: [
       { id: CONTROLLER_FEATURE_ID, actionIds: [waitAction.metadata.id] },
       { id: "drive-planning", actionIds: [] },
       { id: "object-intake", actionIds: [collectObject.metadata.id] },
       { id: "goal-scoring", actionIds: [scoreObject.metadata.id] },
+      { id: "endgame-parking", actionIds: [parkAction.metadata.id] },
     ],
     rankingPoints: NEUTRAL_RANKING_POINT_DEFINITIONS,
+  };
+}
+
+/** Policy proof fixture with enough neutral targets for a full deterministic match. */
+export function createNeutralPolicyGameDefinition(): GameDefinition {
+  const game = createNeutralGameDefinition();
+  return {
+    ...game,
+    zones: game.zones.map((zone) => zone.id === "collection-area"
+      ? { ...zone, initialGameObjectCount: undefined }
+      : zone.id === "scoring-area"
+        ? { ...zone, gameObjectCapacity: undefined }
+        : zone),
   };
 }
 

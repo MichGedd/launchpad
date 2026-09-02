@@ -46,11 +46,13 @@ test("neutral preview starts at the default pose with zero metrics and empty inv
     rankingPoints: {
       collection: { progress: 0, earned: false },
       scoring: { progress: 0, earned: false },
+      endgame: { progress: 0, earned: false },
     },
   });
   assert.deepEqual(preview.initialFrame.zoneStates, {
     "collection-area": { kind: "pickup", availableGameObjectCount: 2 },
     "scoring-area": { kind: "score", scoredGameObjectCount: 0 },
+    "endgame-parking-area": { kind: "score", scoredGameObjectCount: 0 },
   });
   assert.equal(preview.initialFrame.timeSeconds, 0);
   assert.equal(preview.initialFrame.status, "awaiting-actions");

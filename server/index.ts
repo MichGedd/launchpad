@@ -10,11 +10,10 @@ import {
   createDevelopmentMockStrategyRunner,
   createVercelStrategyRunner,
   StrategyPlanner,
-  StrategyPlanningError,
 } from "../app/llm/service.ts";
 import { SessionStore } from "../app/llm/session.ts";
 import {
-  runSimulationWithLlm,
+  runSimulationWithPolicy,
   SimulationControllerError,
   simulationGenerationRequestSchema,
   type SimulationGenerationResponse,
@@ -107,49 +106,26 @@ export async function createLaunchpadServer(
   });
 
   app.post("/api/simulation", requireSameOrigin, async (request, response) => {
-    const sessionId = getOrCreateSessionId(request, response, sessions);
-    const configuration = sessions.withConfiguration(sessionId);
-    if (!configuration) {
-      response.status(409).json({ error: "Please configure your LLM before generating a simulation." });
-      return;
-    }
     const parsed = simulationGenerationRequestSchema.safeParse(request.body);
     if (!parsed.success) {
       response.status(400).json({ error: "Simulation request is invalid." });
       return;
     }
-    if (!sessions.beginGeneration(sessionId)) {
-      response.status(429).json({ error: "A simulation is already being generated." });
-      return;
-    }
     try {
-      const result = await runSimulationWithLlm({
-        planner,
-        configuration,
-        input: parsed.data,
-        includeDebugTraces: options.exposeDebugTraces === true,
-      });
-      for (const usage of result.usages) sessions.recordUsage(sessionId, usage);
-      const statistics = sessions.getStatistics(sessionId);
+      const result = await runSimulationWithPolicy({ input: parsed.data });
       const payload = {
         scene: result.scene,
-        ...(statistics ? { statistics } : {}),
-        ...(options.exposeDebugTraces === true && result.debugTrace
-          ? { debugTrace: result.debugTrace }
-          : {}),
+        policy: result.policy,
+        decisionCount: result.decisionCount,
+        policyTrace: result.policyTrace,
       } satisfies SimulationGenerationResponse;
       response.json(payload);
     } catch (error) {
-      if (error instanceof StrategyPlanningError && error.usage) {
-        sessions.recordUsage(sessionId, error.usage);
-      }
-      response.status(502).json({
-        error: error instanceof StrategyPlanningError || error instanceof SimulationControllerError
+      response.status(error instanceof SimulationControllerError ? 400 : 500).json({
+        error: error instanceof SimulationControllerError
           ? error.message
           : "The simulation could not be generated.",
       });
-    } finally {
-      sessions.endGeneration(sessionId);
     }
   });
 

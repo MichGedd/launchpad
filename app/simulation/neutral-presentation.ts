@@ -56,12 +56,19 @@ export const NEUTRAL_ZONES: readonly Zone[] = Object.freeze([
     gameObjectCapacity: 2,
     shape: { type: "rectangle", center: { xFeet: 38, yFeet: 18 }, widthFeet: 6, heightFeet: 4 },
   },
+  {
+    id: "endgame-parking-area",
+    kind: "score",
+    tags: ["endgame-parking"],
+    shape: { type: "rectangle", center: { xFeet: 46, yFeet: 6 }, widthFeet: 4, heightFeet: 3 },
+  },
 ]);
 
 /** Shared ranking-point definitions consumed by the engine and preview. */
 export const NEUTRAL_RANKING_POINT_DEFINITIONS: readonly Required<RankingPointDefinition>[] = Object.freeze([
   { id: "collection", label: "Collection RP", value: 1 },
   { id: "scoring", label: "Scoring RP", value: 1 },
+  { id: "endgame", label: "Endgame RP", value: 1 },
 ]);
 
 /** Shared starting pose for the neutral scenario. */
@@ -97,6 +104,7 @@ export function createNeutralVisualizerPreview(
     zoneStates: Object.freeze({
       "collection-area": Object.freeze({ kind: "pickup" as const, availableGameObjectCount: 2 }),
       "scoring-area": Object.freeze({ kind: "score" as const, scoredGameObjectCount: 0 }),
+      "endgame-parking-area": Object.freeze({ kind: "score" as const, scoredGameObjectCount: 0 }),
     }),
     status: "awaiting-actions",
   });

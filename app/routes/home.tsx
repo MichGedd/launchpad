@@ -7,7 +7,6 @@ export default function Home() {
     <VisualizerWorkspace
       features={DEFAULT_ROBOT_FEATURE_OPTIONS}
       initialPreview={createNeutralVisualizerPreview()}
-      initialStrategy=""
     />
   );
 }

@@ -85,6 +85,11 @@ export const DEFAULT_ROBOT_FEATURE_OPTIONS: readonly RobotFeatureOption[] = Obje
     label: "Goal scoring",
     description: "Deliver collected objects to a scoring area.",
   },
+  {
+    id: "endgame-parking",
+    label: "Endgame parking",
+    description: "Park in the endgame area when the match enters endgame.",
+  },
 ]);
 
 export type { PlaybackFrame };

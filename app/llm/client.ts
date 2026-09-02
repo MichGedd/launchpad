@@ -8,11 +8,6 @@ import type {
   StrategyPlan,
   TokenUsage,
 } from "./schemas";
-import type {
-  SimulationDebugTrace,
-  SimulationGenerationRequest,
-  SimulationGenerationResponse,
-} from "~/simulation";
 
 export type {
   LlmConfigurationRequest,
@@ -24,8 +19,6 @@ export type {
   TokenUsage,
 };
 export type { LlmActionRequest };
-export type { SimulationDebugTrace };
-
 const DEFAULT_CONFIGURATION: LlmConfigurationStatus = {
   provider: "openai",
   model: "gpt-5.6-luna",
@@ -77,15 +70,6 @@ export function saveLlmConfiguration(
 
 export function disconnectLlm(): Promise<void> {
   return request<void>("/api/llm/configuration", { method: "DELETE" });
-}
-
-export function generateSimulation(
-  requestBody: SimulationGenerationRequest,
-): Promise<SimulationGenerationResponse> {
-  return request<SimulationGenerationResponse>("/api/simulation", {
-    method: "POST",
-    body: JSON.stringify(requestBody),
-  });
 }
 
 export function getLlmStatistics(): Promise<LlmStatistics> {

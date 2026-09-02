@@ -20,14 +20,26 @@ import type {
   StrategyPlan,
   TokenUsage,
 } from "../llm/schemas.ts";
+import {
+  createNeutralPolicyCatalog,
+  type NeutralPolicyContext,
+} from "./neutral-policy.ts";
+import {
+  evaluatePolicy,
+  type PolicyDefinition,
+  type PolicyDecisionTrace,
+  type PolicyEvaluationResult,
+} from "../policy/index.ts";
 import type { FieldPresentation, RobotCustomization, VisualizerScene } from "../visualizer/types.ts";
 import {
   createNeutralGameDefinition,
+  createNeutralPolicyGameDefinition,
   neutralRobotConfiguration,
   NEUTRAL_SIMULATION_FIELD,
 } from "./neutral.ts";
 
 export const MAX_SIMULATION_DECISIONS = 24;
+export const MAX_POLICY_DECISIONS = 256;
 const MAX_NO_PROGRESS_DECISIONS = 3;
 
 export interface SimulationControllerInput {
@@ -67,6 +79,29 @@ export interface SimulationControllerResult {
   readonly usages: readonly TokenUsage[];
   readonly decisionCount: number;
   readonly debugTrace?: readonly SimulationDebugTrace[];
+}
+
+export interface PolicySimulationControllerInput {
+  readonly policy: PolicyDefinition;
+  readonly selectedFeatureIds: readonly string[];
+  readonly robotCustomization: RobotCustomization;
+  readonly navGrid: import("../engine/types.ts").NavGridDefinition;
+}
+
+export interface PolicySimulationControllerOptions {
+  readonly input: PolicySimulationControllerInput;
+  readonly game?: GameDefinition;
+  readonly field?: FieldPresentation;
+  readonly createRobotConfiguration?: (input: PolicySimulationControllerInput) => RobotConfiguration;
+  readonly seed?: number;
+  readonly maxDecisions?: number;
+}
+
+export interface PolicySimulationControllerResult {
+  readonly scene: VisualizerScene;
+  readonly policy: PolicyDefinition;
+  readonly decisionCount: number;
+  readonly policyTrace: readonly PolicyDecisionTrace[];
 }
 
 export class SimulationControllerError extends Error {
@@ -183,6 +218,111 @@ export async function runSimulationWithLlm(
     decisionCount: traces.length > 0 ? traces.length : usages.length,
     ...(options.includeDebugTraces ? { debugTrace: Object.freeze([...traces]) } : {}),
   };
+}
+
+/** Run a match using only the validated, deterministic policy catalog. */
+export async function runSimulationWithPolicy(
+  options: PolicySimulationControllerOptions,
+): Promise<PolicySimulationControllerResult> {
+  const maxDecisions = options.maxDecisions ?? MAX_POLICY_DECISIONS;
+  if (!Number.isInteger(maxDecisions) || maxDecisions < 1 || maxDecisions > MAX_POLICY_DECISIONS) {
+    throw new SimulationControllerError(`maxDecisions must be an integer from 1 to ${MAX_POLICY_DECISIONS}.`);
+  }
+
+  const catalog = createNeutralPolicyCatalog();
+  let policy: PolicyDefinition;
+  try {
+    policy = catalog.validatePolicy(options.input.policy);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "The policy could not be validated.";
+    throw new SimulationControllerError(`Invalid policy: ${message}`);
+  }
+
+  const game = {
+    ...(options.game ?? createNeutralPolicyGameDefinition()),
+    navGrid: options.input.navGrid,
+  };
+  const robotConfiguration = options.createRobotConfiguration?.(options.input)
+    ?? neutralRobotConfiguration(options.input.selectedFeatureIds, options.input.robotCustomization);
+  const simulation = createSimulation(game, robotConfiguration, {
+    seed: options.seed,
+    recordPlayback: true,
+    interruptAtEndgameStart: true,
+  });
+  const policyTrace: PolicyDecisionTrace[] = [];
+  const rejectedTargetIds = new Set<string>();
+  let decision = simulation.getDecisionState();
+  let noProgressDecisions = 0;
+
+  for (let decisionIndex = 0; decisionIndex < maxDecisions && decision.status !== "complete"; decisionIndex += 1) {
+    const stateBefore = decision;
+    const context: NeutralPolicyContext = {
+      decision: stateBefore,
+      game,
+      rejectedTargetIds,
+    };
+    const phase = stateBefore.endgameActive ? "endgame" : "match";
+    const evaluated = evaluateNeutralPolicy(policy, phase, context, catalog, decisionIndex + 1);
+    policyTrace.push(evaluated.trace);
+    if (evaluated.plan.actions.length === 0) {
+      throw new SimulationControllerError(
+        `Policy goal "${evaluated.plan.goalId}" returned an empty action queue at decision ${decisionIndex + 1}.`,
+      );
+    }
+
+    const queueResult = stateBefore.status === "blocked"
+      ? simulation.replaceActions(evaluated.plan.actions)
+      : simulation.queueActions(evaluated.plan.actions);
+    if (!queueResult.accepted) {
+      const errors = queueResult.errors.map((error) => error.message).join(" ");
+      throw new SimulationControllerError(`Policy goal "${evaluated.plan.goalId}" produced invalid actions: ${errors}`);
+    }
+
+    decision = simulation.runUntilDecision();
+    if (decision.status === "blocked" && evaluated.plan.targetId !== undefined) {
+      rejectedTargetIds.add(evaluated.plan.targetId);
+    }
+    const progressed = madeProgress(stateBefore, decision);
+    if (progressed) {
+      rejectedTargetIds.clear();
+      noProgressDecisions = 0;
+    } else if (decision.status !== "complete") {
+      noProgressDecisions += 1;
+      if (noProgressDecisions >= MAX_NO_PROGRESS_DECISIONS) {
+        throw new SimulationControllerError(
+          `The simulation made no progress for ${MAX_NO_PROGRESS_DECISIONS} consecutive policy decisions.`,
+        );
+      }
+    }
+  }
+
+  if (decision.status !== "complete") {
+    throw new SimulationControllerError(
+      `The simulation did not complete within ${maxDecisions} policy decisions (status: ${decision.status}).`,
+    );
+  }
+  const playback = simulation.exportPlayback();
+  if (playback === null) throw new SimulationControllerError("Simulation playback was not recorded.");
+  return {
+    scene: { field: options.field ?? NEUTRAL_SIMULATION_FIELD, navGrid: options.input.navGrid, playback },
+    policy,
+    decisionCount: policyTrace.length,
+    policyTrace: Object.freeze([...policyTrace]),
+  };
+}
+
+function evaluateNeutralPolicy(
+  policy: PolicyDefinition,
+  phase: "match" | "endgame",
+  context: NeutralPolicyContext,
+  catalog: ReturnType<typeof createNeutralPolicyCatalog>,
+  decisionNumber: number,
+): PolicyEvaluationResult {
+  // Keep the neutral IDs and their season data in this adapter; the evaluator is generic.
+  return evaluatePolicy(policy, phase, context, catalog, {
+    decisionNumber,
+    elapsedSeconds: context.decision.elapsedSeconds,
+  });
 }
 
 function createGenerationRequest(

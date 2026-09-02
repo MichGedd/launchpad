@@ -7,6 +7,44 @@ import type {
   Zone,
 } from "./types.ts";
 
+export interface WaitActionRequest {
+  readonly durationSeconds: number;
+}
+
+export interface WaitActionRuntimeState {
+  readonly elapsedSeconds: number;
+}
+
+/** Create the simple, season-neutral wait action used by controllers. */
+export function createWaitAction(
+  id = "wait",
+  description = "Wait without moving for a specified duration.",
+): ActionDefinition<WaitActionRequest, WaitActionRuntimeState> {
+  return {
+    metadata: { id, description },
+    validate(parameters) {
+      if (typeof parameters !== "object" || parameters === null || Array.isArray(parameters)) {
+        return { valid: false, message: "Wait parameters must include durationSeconds." };
+      }
+      const durationSeconds = (parameters as { readonly durationSeconds?: unknown }).durationSeconds;
+      if (typeof durationSeconds !== "number" || !Number.isFinite(durationSeconds) || durationSeconds < 0) {
+        return { valid: false, message: "durationSeconds must be a finite, non-negative number." };
+      }
+      return { valid: true, value: { durationSeconds } };
+    },
+    start: () => ({ ready: true, state: { elapsedSeconds: 0 } }),
+    advance(_context, request, state, availableSeconds) {
+      const consumedSeconds = Math.min(availableSeconds, Math.max(0, request.durationSeconds - state.elapsedSeconds));
+      const elapsedSeconds = state.elapsedSeconds + consumedSeconds;
+      return {
+        state: { elapsedSeconds },
+        consumedSeconds,
+        complete: elapsedSeconds >= request.durationSeconds,
+      };
+    },
+  };
+}
+
 export interface ZoneSelector {
   readonly kind: "pickup" | "score";
   readonly tags?: readonly string[];

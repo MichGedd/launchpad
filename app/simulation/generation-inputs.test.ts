@@ -10,16 +10,15 @@ import {
 
 const inputs: SimulationGenerationInputs = {
   request: {
-    strategy: "Drive to the scoring zone.",
+    policy: {
+      version: 1,
+      name: "Fingerprint policy",
+      match: { rules: [], fallback: { goalId: "wait-until-match-end", parameters: {} } },
+      endgame: { rules: [], fallback: { goalId: "wait-until-match-end", parameters: {} } },
+    },
     selectedFeatureIds: ["drive-planning"],
     robotCustomization: DEFAULT_ROBOT_CUSTOMIZATION,
     navGrid: NEUTRAL_NAV_GRID,
-  },
-  llmConfiguration: {
-    configured: true,
-    model: "gpt-5.6-luna",
-    provider: "openai",
-    reasoningEffort: "low",
   },
 };
 
@@ -32,7 +31,10 @@ test("fingerprints identical simulation inputs identically", () => {
 
 test("fingerprint changes when any simulation input changes", () => {
   const changes: readonly SimulationGenerationInputs[] = [
-    { ...inputs, request: { ...inputs.request, strategy: "Score first." } },
+    {
+      ...inputs,
+      request: { ...inputs.request, policy: { ...inputs.request.policy!, name: "Score first" } },
+    },
     { ...inputs, request: { ...inputs.request, selectedFeatureIds: [] } },
     {
       ...inputs,
@@ -48,14 +50,21 @@ test("fingerprint changes when any simulation input changes", () => {
         navGrid: { ...NEUTRAL_NAV_GRID, zones: [] },
       },
     },
-    {
-      ...inputs,
-      llmConfiguration: { ...inputs.llmConfiguration!, model: "gpt-5.5" },
-    },
   ];
   const originalFingerprint = simulationGenerationInputFingerprint(inputs);
 
   for (const changedInputs of changes) {
     assert.notEqual(simulationGenerationInputFingerprint(changedInputs), originalFingerprint);
   }
+});
+
+test("fingerprint includes policy edits and only policy-affecting inputs", () => {
+  const originalFingerprint = simulationGenerationInputFingerprint(inputs);
+  assert.notEqual(
+    simulationGenerationInputFingerprint({
+      ...inputs,
+      request: { ...inputs.request, policy: { ...inputs.request.policy!, name: "Changed" } },
+    }),
+    originalFingerprint,
+  );
 });
