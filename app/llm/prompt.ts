@@ -35,6 +35,7 @@ function selectActionMetadata(actions: readonly LlmActionMetadata[]): readonly L
     ...(action.zoneKind ? { zoneKind: action.zoneKind } : {}),
     ...(action.zoneTags ? { zoneTags: action.zoneTags } : {}),
     ...(action.zoneIds ? { zoneIds: action.zoneIds } : {}),
+    ...(action.zoneGameObjectCount ? { zoneGameObjectCount: action.zoneGameObjectCount } : {}),
   }));
 }
 
@@ -76,6 +77,7 @@ export function actionMetadataFromEngine(
     ...(action.zoneKind ? { zoneKind: action.zoneKind } : {}),
     ...(action.zoneTags ? { zoneTags: [...action.zoneTags] } : {}),
     ...(action.zoneIds ? { zoneIds: [...action.zoneIds] } : {}),
+    ...(action.zoneGameObjectCount ? { zoneGameObjectCount: action.zoneGameObjectCount } : {}),
   }));
 }
 

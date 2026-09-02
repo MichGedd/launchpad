@@ -19,6 +19,8 @@ export interface ZoneInteractionActionConfiguration {
   readonly zone: ZoneSelector;
   readonly durationSeconds: number;
   readonly successProbability: number;
+  /** Number of objects removed from a pickup zone or added to a score zone on success. Defaults to one. */
+  readonly gameObjectCountOnSuccess?: number;
   readonly requiredInventory?: Readonly<Record<string, number>>;
   readonly inventoryDeltaOnSuccess?: Readonly<Record<string, number>>;
   readonly pointsOnSuccess?: number;
@@ -88,6 +90,10 @@ export function createZoneInteractionAction(
       || configuration.successProbability < 0 || configuration.successProbability > 1) {
     throw new Error(`Action "${configuration.id}" success probability must be finite and between zero and one.`);
   }
+  const gameObjectCount = configuration.gameObjectCountOnSuccess ?? 1;
+  if (!Number.isSafeInteger(gameObjectCount) || gameObjectCount <= 0) {
+    throw new Error(`Action "${configuration.id}" game-object count must be a positive integer.`);
+  }
   for (const [objectType, count] of Object.entries(configuration.requiredInventory ?? {})) {
     if (!Number.isFinite(count) || !Number.isInteger(count) || count < 0) {
       throw new Error(`Action "${configuration.id}" required ${objectType} inventory must be a non-negative integer.`);
@@ -113,15 +119,36 @@ export function createZoneInteractionAction(
     zoneKind: configuration.zone.kind,
     zoneTags: configuration.zone.tags,
     zoneIds: configuration.zone.zoneIds,
+    zoneGameObjectCount: gameObjectCount,
   };
 
   return {
     metadata,
     validate: validateEmptyParameters,
     start(context): ActionStartResult<ZoneInteractionRuntimeState> {
-      const zone = context.zones.find((candidate) =>
+      const contactedZones = context.zones.filter((candidate) =>
         zoneMatchesSelector(candidate, configuration.zone) && context.robotContactsZone(candidate));
-      if (!zone) return { ready: false, reason: `Robot is not contacting an eligible ${configuration.zone.kind} zone.` };
+      if (contactedZones.length === 0) {
+        return { ready: false, reason: `Robot is not contacting an eligible ${configuration.zone.kind} zone.` };
+      }
+      const zone = contactedZones.find((candidate) => {
+        const state = context.zoneStates[candidate.id];
+        if (candidate.kind === "pickup") {
+          return state?.kind === "pickup"
+            && (state.availableGameObjectCount === null || state.availableGameObjectCount >= gameObjectCount);
+        }
+        return candidate.kind === "score" && state?.kind === "score"
+          && (candidate.gameObjectCapacity === undefined
+            || state.scoredGameObjectCount + gameObjectCount <= candidate.gameObjectCapacity);
+      });
+      if (!zone) {
+        return {
+          ready: false,
+          reason: configuration.zone.kind === "pickup"
+            ? `Contacted pickup zones do not have ${gameObjectCount} game objects available.`
+            : `Contacted score zones do not have space for ${gameObjectCount} game objects.`,
+        };
+      }
 
       const inventoryFailure = inventoryRequirementFailure(context.robot, configuration.requiredInventory ?? {});
       if (inventoryFailure) return { ready: false, reason: inventoryFailure };
@@ -143,6 +170,9 @@ export function createZoneInteractionAction(
         consumedSeconds,
         complete: true,
         inventoryDelta: successful ? configuration.inventoryDeltaOnSuccess : undefined,
+        zoneGameObjectDeltas: successful
+          ? { [state.zoneId]: configuration.zone.kind === "pickup" ? -gameObjectCount : gameObjectCount }
+          : undefined,
         pointsDelta: successful ? configuration.pointsOnSuccess : undefined,
         rankingPointProgressDelta: successful ? configuration.rankingPointProgressDeltaOnSuccess : undefined,
         events: [{

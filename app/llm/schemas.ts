@@ -45,6 +45,7 @@ export const actionMetadataSchema = z.object({
   zoneKind: z.enum(["pickup", "score"]).optional(),
   zoneTags: z.array(z.string().max(64)).max(32).readonly().optional(),
   zoneIds: z.array(z.string().max(128)).max(64).readonly().optional(),
+  zoneGameObjectCount: z.number().int().positive().optional(),
 }).strict();
 export type LlmActionMetadata = z.infer<typeof actionMetadataSchema>;
 

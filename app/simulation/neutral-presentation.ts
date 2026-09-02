@@ -46,12 +46,14 @@ export const NEUTRAL_ZONES: readonly Zone[] = Object.freeze([
     id: "collection-area",
     kind: "pickup",
     tags: ["game-object"],
+    initialGameObjectCount: 2,
     shape: { type: "circle", center: { xFeet: 18, yFeet: 5 }, radiusFeet: 2 },
   },
   {
     id: "scoring-area",
     kind: "score",
     tags: ["game-object"],
+    gameObjectCapacity: 2,
     shape: { type: "rectangle", center: { xFeet: 38, yFeet: 18 }, widthFeet: 6, heightFeet: 4 },
   },
 ]);
@@ -92,6 +94,10 @@ export function createNeutralVisualizerPreview(
       ...customization,
     }),
     metrics,
+    zoneStates: Object.freeze({
+      "collection-area": Object.freeze({ kind: "pickup" as const, availableGameObjectCount: 2 }),
+      "scoring-area": Object.freeze({ kind: "score" as const, scoredGameObjectCount: 0 }),
+    }),
     status: "awaiting-actions",
   });
   return Object.freeze({

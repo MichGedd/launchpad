@@ -224,6 +224,7 @@ const collectBall = createZoneInteractionAction({
   zone: { kind: "pickup", tags: ["ball"] },
   durationSeconds: 0.5,
   successProbability: 0.9,
+  gameObjectCountOnSuccess: 1,
   inventoryDeltaOnSuccess: { ball: 1 },
   pointsOnSuccess: 3,
   rankingPointProgressDeltaOnSuccess: { collection: 0.25 },
@@ -232,6 +233,12 @@ const collectBall = createZoneInteractionAction({
 ```
 
 The zone selector may use `zoneIds`, `tags`, or both. Every configured tag must be present. The robot footprint must contact an eligible zone when the action starts.
+
+`gameObjectCountOnSuccess` defaults to one. A successful pickup removes that
+many objects from the contacted finite source, while a successful score adds
+that many objects to the contacted score zone. Depleted sources and full score
+zones fail their action precondition; failed probability checks leave their
+counts unchanged.
 
 `requiredInventory` defines minimum held counts. `inventoryDeltaOnSuccess` uses positive counts for collection and negative counts for scoring. Capacity and non-negative inventory constraints are checked before execution and again when a change is applied.
 
@@ -291,12 +298,13 @@ const waitAction: ActionDefinition<WaitRequest, WaitState> = {
 
 - `validate` converts untrusted parameters into the action's request type.
 - `start` checks preconditions. Returning `ready: false` blocks the queue without consuming time.
-- `advance` receives an immutable robot snapshot, zones, current simulation time, seeded random function, contact helper, and the remaining time budget.
+- `advance` receives immutable robot and zone-state snapshots, zone definitions, current simulation time, seeded random function, contact helper, and the remaining time budget.
 - `consumedSeconds` must be finite, non-negative, and no greater than `availableSeconds`.
 - An incomplete action must consume time; otherwise the engine throws to prevent an infinite loop.
 - `inventoryDelta`, `pointsDelta`, `rankingPointProgressDelta`, and custom
-  `events` may be returned from `advance`. Ranking-point IDs must be declared by
-  the game definition.
+  `events` may be returned from `advance`. `zoneGameObjectDeltas` applies signed
+  count changes keyed by pickup or score zone ID. Ranking-point IDs must be
+  declared by the game definition.
 
 ## Zones and collision behavior
 
@@ -314,6 +322,25 @@ type ZoneShape =
     }
   | { type: "polygon"; vertices: readonly Point[] };
 ```
+
+Pickup zones may declare `initialGameObjectCount`; omitting it creates an
+unlimited source. Score zones may declare `gameObjectCapacity`; omitting it
+allows unlimited scoring. Counts are aggregate per zone rather than per object
+type.
+
+Season adapters can configure delayed one-for-one recycling:
+
+```ts
+zoneRecyclingRules: [{
+  scoreZoneId: "processor",
+  sourceZoneId: "return-chute",
+  delaySeconds: 3,
+}]
+```
+
+The source must be a finite pickup zone. Each object scored in the configured
+score zone becomes available in the source at the exact delayed simulation
+timestamp. Games without a recycling rule do not recycle objects.
 
 Pickup and score contact uses the robot's oriented rectangular footprint. Decision-state distances are measured from that footprint to the closest relevant zone boundary and become zero on contact.
 
@@ -335,12 +362,14 @@ For legacy games without a NavGrid, drive movement still uses swept collision ch
 - Cumulative points and per-type ranking-point progress in `metrics`.
 - Active and queued action summaries.
 - Enabled action metadata.
-- Feature-relevant pickup and score zones.
+- Feature-relevant, currently usable pickup and score zones with live counts.
 - All non-traversal zones.
 - Footprint-to-zone distance for the nearest relevant pickup and score zone, or `null` when none is available.
 - Structured block information when status is `blocked`.
 
 Pickup and score zones are considered relevant only when an enabled action selects them. This keeps future controller input limited to interactions the configured robot can actually perform.
+Depleted pickup zones, full score zones, and zone actions with no usable target
+are omitted from decision state supplied to the planner.
 
 ## Playback and events
 
@@ -355,7 +384,7 @@ if (playback) {
 ```
 
 The returned structure is a detached, deeply frozen snapshot containing match
-timing, zones, normalized ranking-point definitions, robot and metric frames,
+timing, zones, normalized ranking-point definitions, robot, metric, and zone-state frames,
 and timestamped action events. Recording is disabled by default to avoid
 retaining every frame during large aggregate runs.
 
@@ -368,6 +397,9 @@ Engine-generated events include:
 - `inventory-changed`
 - `points-changed`
 - `ranking-point-progress-changed`
+- `zone-game-object-count-changed`
+- `zone-recycle-scheduled`
+- `zone-recycled`
 - `simulation-complete`
 - Zone-interaction success or failure events
 

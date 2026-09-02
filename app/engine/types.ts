@@ -33,12 +33,45 @@ export interface PolygonShape {
 export type ZoneShape = CircleShape | RectangleShape | PolygonShape;
 export type ZoneKind = "pickup" | "score" | "non-traversal";
 
-export interface Zone {
+interface ZoneBase {
   readonly id: string;
-  readonly kind: ZoneKind;
   readonly shape: ZoneShape;
   readonly tags?: readonly string[];
 }
+
+export interface PickupZone extends ZoneBase {
+  readonly kind: "pickup";
+  /** Initial source inventory. Omit for an unlimited source. */
+  readonly initialGameObjectCount?: number;
+}
+
+export interface ScoreZone extends ZoneBase {
+  readonly kind: "score";
+  /** Maximum objects accepted by this zone. Omit for unlimited scoring. */
+  readonly gameObjectCapacity?: number;
+}
+
+export interface NonTraversalZone extends ZoneBase {
+  readonly kind: "non-traversal";
+}
+
+export type Zone = PickupZone | ScoreZone | NonTraversalZone;
+
+export interface PickupZoneState {
+  readonly kind: "pickup";
+  /** Remaining objects, or null when the source is unlimited. */
+  readonly availableGameObjectCount: number | null;
+}
+
+export interface ScoreZoneState {
+  readonly kind: "score";
+  readonly scoredGameObjectCount: number;
+}
+
+export type ZoneGameObjectState = PickupZoneState | ScoreZoneState;
+export type ZoneGameObjectStates = Readonly<Record<string, ZoneGameObjectState>>;
+export type PickupZoneSnapshot = PickupZone & PickupZoneState;
+export type ScoreZoneSnapshot = ScoreZone & ScoreZoneState;
 
 export type NavGridTraversalRule =
   | { readonly kind: "general" }
@@ -128,6 +161,8 @@ export interface ActionMetadata {
   readonly zoneKind?: "pickup" | "score";
   readonly zoneTags?: readonly string[];
   readonly zoneIds?: readonly string[];
+  /** Objects consumed from or accepted by the selected zone. Defaults to one. */
+  readonly zoneGameObjectCount?: number;
 }
 
 export interface ActionEvent {
@@ -141,6 +176,7 @@ export interface ActionContext {
   readonly robot: RobotState;
   readonly metrics: MatchMetrics;
   readonly zones: readonly Zone[];
+  readonly zoneStates: ZoneGameObjectStates;
   readonly elapsedSeconds: number;
   readonly random: () => number;
   readonly robotContactsZone: (zone: Zone) => boolean;
@@ -159,6 +195,8 @@ export interface ActionAdvanceResult<RuntimeState> {
   readonly consumedSeconds: number;
   readonly complete: boolean;
   readonly inventoryDelta?: Readonly<Record<string, number>>;
+  /** Signed game-object count changes keyed by pickup or score zone ID. */
+  readonly zoneGameObjectDeltas?: Readonly<Record<string, number>>;
   readonly pointsDelta?: number;
   readonly rankingPointProgressDelta?: Readonly<Record<string, number>>;
   readonly events?: readonly Omit<ActionEvent, "actionId" | "timeSeconds">[];
@@ -180,10 +218,17 @@ export interface GameDefinition {
   readonly timing?: MatchTiming;
   readonly gameObjectTypes: readonly string[];
   readonly zones: readonly Zone[];
+  readonly zoneRecyclingRules?: readonly ZoneRecyclingRule[];
   readonly actions?: readonly ActionDefinition[];
   readonly robotFeatures?: readonly RobotFeature[];
   readonly rankingPoints?: readonly RankingPointDefinition[];
   readonly navGrid?: NavGridDefinition;
+}
+
+export interface ZoneRecyclingRule {
+  readonly scoreZoneId: string;
+  readonly sourceZoneId: string;
+  readonly delaySeconds: number;
 }
 
 export type SimulationStatus = "running" | "awaiting-actions" | "blocked" | "complete";
@@ -210,9 +255,9 @@ export interface DecisionState {
   readonly activeAction: ActionSummary | null;
   readonly queuedActions: readonly ActionSummary[];
   readonly enabledActions: readonly ActionMetadata[];
-  readonly pickupZones: readonly Zone[];
-  readonly scoreZones: readonly Zone[];
-  readonly nonTraversalZones: readonly Zone[];
+  readonly pickupZones: readonly PickupZoneSnapshot[];
+  readonly scoreZones: readonly ScoreZoneSnapshot[];
+  readonly nonTraversalZones: readonly NonTraversalZone[];
   readonly distanceToNearestPickupZoneFeet: number | null;
   readonly distanceToNearestScoreZoneFeet: number | null;
   readonly block: SimulationBlock | null;
@@ -222,6 +267,7 @@ export interface PlaybackFrame {
   readonly timeSeconds: number;
   readonly robot: RobotState;
   readonly metrics: MatchMetrics;
+  readonly zoneStates: ZoneGameObjectStates;
   readonly status: SimulationStatus;
 }
 

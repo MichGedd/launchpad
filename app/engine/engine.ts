@@ -24,7 +24,10 @@ import {
   type GameDefinition,
   type MatchTiming,
   type MatchMetrics,
+  type NonTraversalZone,
   type PlaybackFrame,
+  type PickupZone,
+  type PickupZoneSnapshot,
   type Pose,
   type QueueResult,
   type RobotConfiguration,
@@ -35,7 +38,11 @@ import {
   type SimulationOptions,
   type SimulationPlayback,
   type SimulationStatus,
+  type ScoreZone,
+  type ScoreZoneSnapshot,
   type Zone,
+  type ZoneGameObjectState,
+  type ZoneGameObjectStates,
 } from "./types.ts";
 
 const TIME_EPSILON = 1e-9;
@@ -106,10 +113,20 @@ function validateGame(game: GameDefinition): void {
     }
   };
   const zoneIds = new Set<string>();
+  const zonesById = new Map<string, Zone>();
   for (const zone of game.zones) {
     if (zone.id.length === 0) throw new Error("Zone IDs cannot be empty.");
     if (zoneIds.has(zone.id)) throw new Error(`Duplicate zone ID "${zone.id}".`);
     zoneIds.add(zone.id);
+    zonesById.set(zone.id, zone);
+    if (zone.kind === "pickup" && zone.initialGameObjectCount !== undefined
+        && (!Number.isSafeInteger(zone.initialGameObjectCount) || zone.initialGameObjectCount < 0)) {
+      throw new Error(`Pickup zone "${zone.id}" initial game-object count must be a non-negative integer.`);
+    }
+    if (zone.kind === "score" && zone.gameObjectCapacity !== undefined
+        && (!Number.isSafeInteger(zone.gameObjectCapacity) || zone.gameObjectCapacity < 0)) {
+      throw new Error(`Score zone "${zone.id}" game-object capacity must be a non-negative integer.`);
+    }
     if (zone.shape.type === "circle") {
       validatePoint(zone.shape.center, `Zone "${zone.id}" center`);
       finitePositive(zone.shape.radiusFeet, `Zone "${zone.id}" radius`);
@@ -127,6 +144,20 @@ function validateGame(game: GameDefinition): void {
     }
     if (zone.shape.type === "polygon") {
       zone.shape.vertices.forEach((point) => validatePoint(point, `Zone "${zone.id}" vertex`));
+    }
+  }
+  for (const rule of game.zoneRecyclingRules ?? []) {
+    const scoreZone = zonesById.get(rule.scoreZoneId);
+    const sourceZone = zonesById.get(rule.sourceZoneId);
+    if (!scoreZone) throw new Error(`Zone recycling rule references unknown score zone "${rule.scoreZoneId}".`);
+    if (scoreZone.kind !== "score") throw new Error(`Zone recycling score zone "${rule.scoreZoneId}" must be a score zone.`);
+    if (!sourceZone) throw new Error(`Zone recycling rule references unknown source zone "${rule.sourceZoneId}".`);
+    if (sourceZone.kind !== "pickup") throw new Error(`Zone recycling source zone "${rule.sourceZoneId}" must be a pickup zone.`);
+    if (sourceZone.initialGameObjectCount === undefined) {
+      throw new Error(`Zone recycling source zone "${rule.sourceZoneId}" must have finite initial inventory.`);
+    }
+    if (!Number.isFinite(rule.delaySeconds) || rule.delaySeconds < 0) {
+      throw new Error("Zone recycling delay must be finite and non-negative.");
     }
   }
 }
@@ -234,6 +265,35 @@ function metricsEqual(first: MatchMetrics, second: MutableMatchMetrics): boolean
   });
 }
 
+function cloneZoneStates(states: Readonly<Record<string, ZoneGameObjectState>>): ZoneGameObjectStates {
+  return Object.freeze(Object.fromEntries(
+    Object.entries(states).map(([zoneId, state]) => [zoneId, Object.freeze({ ...state })]),
+  ));
+}
+
+function zoneStatesEqual(first: ZoneGameObjectStates, second: Readonly<Record<string, ZoneGameObjectState>>): boolean {
+  const firstIds = Object.keys(first);
+  const secondIds = Object.keys(second);
+  return firstIds.length === secondIds.length && firstIds.every((zoneId) => {
+    const left = first[zoneId];
+    const right = second[zoneId];
+    if (left?.kind === "pickup" && right?.kind === "pickup") {
+      return left.availableGameObjectCount === right.availableGameObjectCount;
+    }
+    if (left?.kind === "score" && right?.kind === "score") {
+      return left.scoredGameObjectCount === right.scoredGameObjectCount;
+    }
+    return false;
+  });
+}
+
+interface ScheduledZoneRecycle {
+  readonly sourceZoneId: string;
+  readonly scoreZoneId: string;
+  readonly gameObjectCount: number;
+  readonly timeSeconds: number;
+}
+
 function cloneSummary(action: ValidatedAction): ActionSummary {
   return Object.freeze({ actionId: action.actionId, parameters: structuredClone(action.parameters) });
 }
@@ -249,6 +309,8 @@ export class SimulationEngine {
   readonly #robot: MutableRobotState;
   readonly #navGridNavigator: NavGridNavigator | null;
   readonly #metrics: MutableMatchMetrics;
+  #zoneStates: Record<string, ZoneGameObjectState>;
+  readonly #scheduledZoneRecycles: ScheduledZoneRecycle[] = [];
   readonly #recordPlayback: boolean;
   readonly #frames: PlaybackFrame[] = [];
   readonly #events: ActionEvent[] = [];
@@ -280,6 +342,19 @@ export class SimulationEngine {
         this.#rankingPointDefinitions.map((definition) => [definition.id, { progress: 0, earned: false }]),
       ),
     };
+    const initialZoneStates: Record<string, ZoneGameObjectState> = {};
+    for (const zone of game.zones) {
+      if (zone.kind === "pickup") {
+        initialZoneStates[zone.id] = {
+          kind: "pickup" as const,
+          availableGameObjectCount: zone.initialGameObjectCount ?? null,
+        };
+      }
+      if (zone.kind === "score") {
+        initialZoneStates[zone.id] = { kind: "score" as const, scoredGameObjectCount: 0 };
+      }
+    }
+    this.#zoneStates = initialZoneStates;
 
     for (const definition of game.actions ?? []) {
       if (definition.metadata.id.length === 0) throw new Error("Action IDs cannot be empty.");
@@ -361,13 +436,23 @@ export class SimulationEngine {
     this.#status = "running";
 
     while (this.#remainingTickSeconds > TIME_EPSILON && this.#elapsedSeconds < this.#timing.durationSeconds) {
+      this.#applyDueZoneRecycles();
       if (!this.#active && !this.#startNextAction()) break;
       if (this.#block !== null) break;
       if (!this.#active) continue;
+      const nextRecycleTime = this.#scheduledZoneRecycles[0]?.timeSeconds;
+      const availableSeconds = nextRecycleTime === undefined
+        ? this.#remainingTickSeconds
+        : Math.min(this.#remainingTickSeconds, Math.max(0, nextRecycleTime - this.#elapsedSeconds));
+      if (availableSeconds <= TIME_EPSILON) {
+        this.#applyDueZoneRecycles();
+        continue;
+      }
       const consumed = this.#active?.definition === null
-        ? this.#advanceDrive(this.#active, this.#remainingTickSeconds)
-        : this.#advanceCustom(this.#active!, this.#remainingTickSeconds);
+        ? this.#advanceDrive(this.#active, availableSeconds)
+        : this.#advanceCustom(this.#active!, availableSeconds);
       this.#consumeTime(consumed);
+      this.#applyDueZoneRecycles();
       if (this.#block !== null) break;
       if (consumed <= TIME_EPSILON && this.#active) {
         throw new Error(`Action "${this.#active.actionId}" made no progress.`);
@@ -613,6 +698,10 @@ export class SimulationEngine {
     const nextInventory = result.inventoryDelta
       ? this.#inventoryAfterDelta(result.inventoryDelta, action.actionId)
       : null;
+    const nextZoneStates = result.zoneGameObjectDeltas
+      ? this.#zoneStatesAfterDeltas(result.zoneGameObjectDeltas, action.actionId)
+      : null;
+    const eventTimeSeconds = this.#elapsedSeconds + result.consumedSeconds;
     this.#applyMetricsDelta(result, action.actionId, this.#elapsedSeconds + result.consumedSeconds);
     if (result.inventoryDelta) {
       this.#robot.inventory = nextInventory!;
@@ -623,6 +712,16 @@ export class SimulationEngine {
         details: { ...result.inventoryDelta },
       });
     }
+    if (result.zoneGameObjectDeltas) {
+      const previousZoneStates = this.#zoneStates;
+      this.#zoneStates = nextZoneStates!;
+      this.#recordZoneGameObjectChanges(
+        previousZoneStates,
+        result.zoneGameObjectDeltas,
+        action.actionId,
+        eventTimeSeconds,
+      );
+    }
     for (const event of result.events ?? []) {
       this.#events.push({
         ...event,
@@ -631,7 +730,112 @@ export class SimulationEngine {
       });
     }
     if (result.complete) this.#completeActiveAction(result.consumedSeconds);
+    if (result.zoneGameObjectDeltas && this.#recordPlayback) this.#recordFrameAt(eventTimeSeconds);
     return result.consumedSeconds;
+  }
+
+  #zoneStatesAfterDeltas(
+    deltas: Readonly<Record<string, number>>,
+    actionId: string,
+  ): Record<string, ZoneGameObjectState> {
+    const next = structuredClone(this.#zoneStates);
+    for (const [zoneId, delta] of Object.entries(deltas)) {
+      if (!Number.isSafeInteger(delta)) {
+        throw new Error(`Action "${actionId}" returned a non-integer game-object delta for zone "${zoneId}".`);
+      }
+      const zone = this.#game.zones.find((candidate) => candidate.id === zoneId);
+      const state = next[zoneId];
+      if (!zone || !state || zone.kind === "non-traversal") {
+        throw new Error(`Action "${actionId}" changed unknown game-object zone "${zoneId}".`);
+      }
+      if (zone.kind !== state.kind) throw new Error(`Zone "${zoneId}" has inconsistent game-object state.`);
+      if (state.kind === "pickup") {
+        if (state.availableGameObjectCount === null) continue;
+        const availableGameObjectCount = state.availableGameObjectCount + delta;
+        if (!Number.isSafeInteger(availableGameObjectCount) || availableGameObjectCount < 0) {
+          throw new Error(`Action "${actionId}" depleted pickup zone "${zoneId}" below zero.`);
+        }
+        next[zoneId] = { kind: "pickup", availableGameObjectCount };
+        continue;
+      }
+      const scoreZone = zone as ScoreZone;
+      const scoredGameObjectCount = state.scoredGameObjectCount + delta;
+      if (!Number.isSafeInteger(scoredGameObjectCount) || scoredGameObjectCount < 0) {
+        throw new Error(`Action "${actionId}" produced an invalid scored count for zone "${zoneId}".`);
+      }
+      if (scoreZone.gameObjectCapacity !== undefined && scoredGameObjectCount > scoreZone.gameObjectCapacity) {
+        throw new Error(`Action "${actionId}" exceeded score zone "${zoneId}" capacity.`);
+      }
+      next[zoneId] = { kind: "score", scoredGameObjectCount };
+    }
+    return next;
+  }
+
+  #recordZoneGameObjectChanges(
+    previousStates: Readonly<Record<string, ZoneGameObjectState>>,
+    deltas: Readonly<Record<string, number>>,
+    actionId: string,
+    timeSeconds: number,
+  ): void {
+    for (const [zoneId, delta] of Object.entries(deltas)) {
+      const previous = previousStates[zoneId];
+      const current = this.#zoneStates[zoneId];
+      if (!previous || !current || zoneStatesEqual({ [zoneId]: previous }, { [zoneId]: current })) continue;
+      this.#events.push({
+        type: "zone-game-object-count-changed",
+        actionId,
+        timeSeconds,
+        details: current.kind === "pickup"
+          ? { zoneId, delta, availableGameObjectCount: current.availableGameObjectCount as number }
+          : { zoneId, delta, scoredGameObjectCount: current.scoredGameObjectCount },
+      });
+      if (current.kind !== "score" || delta <= 0) continue;
+      for (const rule of this.#game.zoneRecyclingRules ?? []) {
+        if (rule.scoreZoneId !== zoneId) continue;
+        const recycle: ScheduledZoneRecycle = {
+          sourceZoneId: rule.sourceZoneId,
+          scoreZoneId: zoneId,
+          gameObjectCount: delta,
+          timeSeconds: timeSeconds + rule.delaySeconds,
+        };
+        if (recycle.timeSeconds > this.#timing.durationSeconds + TIME_EPSILON) continue;
+        this.#scheduledZoneRecycles.push(recycle);
+        this.#scheduledZoneRecycles.sort((first, second) => first.timeSeconds - second.timeSeconds);
+        this.#events.push({
+          type: "zone-recycle-scheduled",
+          actionId,
+          timeSeconds,
+          details: {
+            scoreZoneId: zoneId,
+            sourceZoneId: rule.sourceZoneId,
+            gameObjectCount: delta,
+            recycleTimeSeconds: recycle.timeSeconds,
+          },
+        });
+      }
+    }
+  }
+
+  #applyDueZoneRecycles(): void {
+    while ((this.#scheduledZoneRecycles[0]?.timeSeconds ?? Number.POSITIVE_INFINITY)
+        <= this.#elapsedSeconds + TIME_EPSILON) {
+      const recycle = this.#scheduledZoneRecycles.shift()!;
+      const deltas = { [recycle.sourceZoneId]: recycle.gameObjectCount };
+      const previousZoneStates = this.#zoneStates;
+      this.#zoneStates = this.#zoneStatesAfterDeltas(deltas, "engine");
+      this.#recordZoneGameObjectChanges(previousZoneStates, deltas, "engine", recycle.timeSeconds);
+      this.#events.push({
+        type: "zone-recycled",
+        actionId: "engine",
+        timeSeconds: recycle.timeSeconds,
+        details: {
+          scoreZoneId: recycle.scoreZoneId,
+          sourceZoneId: recycle.sourceZoneId,
+          gameObjectCount: recycle.gameObjectCount,
+        },
+      });
+      if (this.#recordPlayback) this.#recordFrameAt(recycle.timeSeconds);
+    }
   }
 
   #inventoryAfterDelta(delta: Readonly<Record<string, number>>, actionId: string): Record<string, number> {
@@ -728,6 +932,7 @@ export class SimulationEngine {
       robot,
       metrics: cloneMetrics(this.#metrics),
       zones: this.#game.zones,
+      zoneStates: cloneZoneStates(this.#zoneStates),
       elapsedSeconds: this.#elapsedSeconds,
       random: this.#random,
       robotContactsZone: (zone) => robotContactsZone(robot, zone),
@@ -735,22 +940,55 @@ export class SimulationEngine {
   }
 
   getDecisionState(): DecisionState {
-    const enabledActions = [
+    const configuredActions = [
       driveMetadata(),
       ...[...this.#enabledActionIds]
         .filter((id) => id !== DRIVE_ACTION_ID)
         .map((id) => this.#definitions.get(id)!.metadata),
     ];
-    const relevantZones = (kind: "pickup" | "score"): readonly Zone[] => {
-      const metadata = enabledActions.filter((action) => action.zoneKind === kind);
-      return this.#game.zones.filter((zone) => metadata.some((action) => zoneMatchesSelector(zone, {
-        kind,
-        tags: action.zoneTags,
-        zoneIds: action.zoneIds,
-      })));
+    const zoneIsUsable = (zone: Zone, gameObjectCount: number): zone is PickupZone | ScoreZone => {
+      const state = this.#zoneStates[zone.id];
+      if (zone.kind === "pickup" && state?.kind === "pickup") {
+        return state.availableGameObjectCount === null || state.availableGameObjectCount >= gameObjectCount;
+      }
+      if (zone.kind === "score" && state?.kind === "score") {
+        return zone.gameObjectCapacity === undefined
+          || state.scoredGameObjectCount + gameObjectCount <= zone.gameObjectCapacity;
+      }
+      return false;
     };
-    const pickupZones = relevantZones("pickup");
-    const scoreZones = relevantZones("score");
+    const usableZonesByAction = new Map<string, readonly (PickupZone | ScoreZone)[]>();
+    const enabledActions = configuredActions.flatMap((metadata) => {
+      if (!metadata.zoneKind) return [metadata];
+      const gameObjectCount = metadata.zoneGameObjectCount ?? 1;
+      const zones = this.#game.zones.filter((zone): zone is PickupZone | ScoreZone =>
+        zoneIsUsable(zone, gameObjectCount) && zoneMatchesSelector(zone, {
+          kind: metadata.zoneKind!,
+          tags: metadata.zoneTags,
+          zoneIds: metadata.zoneIds,
+        }));
+      if (zones.length === 0) return [];
+      usableZonesByAction.set(metadata.id, zones);
+      return [{ ...metadata, zoneIds: zones.map((zone) => zone.id) }];
+    });
+    const relevantZoneIds = (kind: "pickup" | "score"): Set<string> => new Set(
+      enabledActions.filter((action) => action.zoneKind === kind)
+        .flatMap((action) => usableZonesByAction.get(action.id)?.map((zone) => zone.id) ?? []),
+    );
+    const pickupZoneIds = relevantZoneIds("pickup");
+    const scoreZoneIds = relevantZoneIds("score");
+    const pickupZones: PickupZoneSnapshot[] = this.#game.zones.flatMap((zone) => {
+      const state = this.#zoneStates[zone.id];
+      return zone.kind === "pickup" && pickupZoneIds.has(zone.id) && state?.kind === "pickup"
+        ? [{ ...zone, availableGameObjectCount: state.availableGameObjectCount }]
+        : [];
+    });
+    const scoreZones: ScoreZoneSnapshot[] = this.#game.zones.flatMap((zone) => {
+      const state = this.#zoneStates[zone.id];
+      return zone.kind === "score" && scoreZoneIds.has(zone.id) && state?.kind === "score"
+        ? [{ ...zone, scoredGameObjectCount: state.scoredGameObjectCount }]
+        : [];
+    });
     const distanceToNearest = (zones: readonly Zone[]): number | null => zones.length === 0
       ? null : Math.min(...zones.map((zone) => robotDistanceToZone(this.#robot, zone)));
     return Object.freeze({
@@ -765,7 +1003,7 @@ export class SimulationEngine {
       enabledActions: Object.freeze(enabledActions.map((metadata) => Object.freeze({ ...metadata }))),
       pickupZones: Object.freeze([...pickupZones]),
       scoreZones: Object.freeze([...scoreZones]),
-      nonTraversalZones: Object.freeze(this.#game.zones.filter((zone) => zone.kind === "non-traversal")),
+      nonTraversalZones: Object.freeze(this.#game.zones.filter((zone): zone is NonTraversalZone => zone.kind === "non-traversal")),
       distanceToNearestPickupZoneFeet: distanceToNearest(pickupZones),
       distanceToNearestScoreZoneFeet: distanceToNearest(scoreZones),
       block: this.#block ? Object.freeze({ ...this.#block }) : null,
@@ -777,11 +1015,13 @@ export class SimulationEngine {
     const frames = structuredClone(this.#frames);
     const lastFrame = frames.at(-1);
     if (lastFrame?.timeSeconds !== this.#elapsedSeconds || lastFrame.status !== this.#status
-        || !metricsEqual(lastFrame.metrics, this.#metrics)) {
+        || !metricsEqual(lastFrame.metrics, this.#metrics)
+        || !zoneStatesEqual(lastFrame.zoneStates, this.#zoneStates)) {
       frames.push({
         timeSeconds: this.#elapsedSeconds,
         robot: cloneRobot(this.#robot),
         metrics: cloneMetrics(this.#metrics),
+        zoneStates: cloneZoneStates(this.#zoneStates),
         status: this.#status,
       });
     }
@@ -796,13 +1036,19 @@ export class SimulationEngine {
   }
 
   #recordFrame(): void {
+    this.#recordFrameAt(this.#elapsedSeconds);
+  }
+
+  #recordFrameAt(timeSeconds: number): void {
     const previous = this.#frames.at(-1);
-    if (previous?.timeSeconds === this.#elapsedSeconds && previous.status === this.#status
-        && metricsEqual(previous.metrics, this.#metrics)) return;
+    if (previous?.timeSeconds === timeSeconds && previous.status === this.#status
+        && metricsEqual(previous.metrics, this.#metrics)
+        && zoneStatesEqual(previous.zoneStates, this.#zoneStates)) return;
     this.#frames.push({
-      timeSeconds: this.#elapsedSeconds,
+      timeSeconds,
       robot: cloneRobot(this.#robot),
       metrics: cloneMetrics(this.#metrics),
+      zoneStates: cloneZoneStates(this.#zoneStates),
       status: this.#status,
     });
   }

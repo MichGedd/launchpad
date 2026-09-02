@@ -163,6 +163,48 @@ describe("zones, collision, and decision state", () => {
     assert.equal(state.distanceToNearestScoreZoneFeet, null);
   });
 
+  test("exposes only usable matching zone IDs when alternatives remain", () => {
+    const pickup = createZoneInteractionAction({
+      id: "pickup-cone",
+      description: "Pickup a cone",
+      zone: { kind: "pickup", tags: ["cone"] },
+      durationSeconds: 1,
+      successProbability: 1,
+    });
+    const simulation = createSimulation({
+      gameObjectTypes: [],
+      zones: [
+        { ...pickupZone, id: "empty", initialGameObjectCount: 0 },
+        { ...pickupZone, id: "available", initialGameObjectCount: 2 },
+      ],
+      actions: [pickup],
+      robotFeatures: [{ id: "intake", actionIds: [pickup.metadata.id] }],
+    }, robot({ selectedFeatureIds: ["intake"] }));
+
+    const state = simulation.getDecisionState();
+    assert.deepEqual(state.pickupZones.map((zone) => zone.id), ["available"]);
+    assert.deepEqual(state.enabledActions.find((action) => action.id === pickup.metadata.id)?.zoneIds, ["available"]);
+  });
+
+  test("accepts zero-capacity score zones and keeps them unavailable", () => {
+    const score = createZoneInteractionAction({
+      id: "score-cone",
+      description: "Score a cone",
+      zone: { kind: "score" },
+      durationSeconds: 1,
+      successProbability: 1,
+    });
+    const simulation = createSimulation({
+      gameObjectTypes: [],
+      zones: [{ ...scoreZone, gameObjectCapacity: 0 }],
+      actions: [score],
+      robotFeatures: [{ id: "scorer", actionIds: [score.metadata.id] }],
+    }, robot({ selectedFeatureIds: ["scorer"] }));
+
+    assert.deepEqual(simulation.getDecisionState().scoreZones, []);
+    assert.equal(simulation.getDecisionState().enabledActions.some((action) => action.id === score.metadata.id), false);
+  });
+
   test("stops at first swept contact with a narrow obstacle and preserves the queue", () => {
     const obstacle: Zone = {
       id: "thin-wall",
@@ -252,6 +294,174 @@ describe("action registration, inventory, and probabilities", () => {
     };
     assert.deepEqual(outcomes(12345), outcomes(12345));
     assert.notDeepEqual(outcomes(12345), outcomes(67890));
+  });
+
+  test("tracks finite pickup and score counts and hides exhausted interactions", () => {
+    const collect = createZoneInteractionAction({
+      id: "collect-ball",
+      description: "Collect one ball",
+      zone: { kind: "pickup", zoneIds: ["source"] },
+      durationSeconds: 0.1,
+      successProbability: 1,
+      inventoryDeltaOnSuccess: { ball: 1 },
+    });
+    const score = createZoneInteractionAction({
+      id: "score-ball",
+      description: "Score one ball",
+      zone: { kind: "score", zoneIds: ["goal"] },
+      durationSeconds: 0.1,
+      successProbability: 1,
+      requiredInventory: { ball: 1 },
+      inventoryDeltaOnSuccess: { ball: -1 },
+    });
+    const simulation = createSimulation({
+      gameObjectTypes: ["ball"],
+      zones: [
+        { id: "source", kind: "pickup", initialGameObjectCount: 1, shape: { type: "circle", center: { xFeet: 0, yFeet: 0 }, radiusFeet: 1 } },
+        { id: "goal", kind: "score", gameObjectCapacity: 1, shape: { type: "circle", center: { xFeet: 0, yFeet: 0 }, radiusFeet: 1 } },
+      ],
+      actions: [collect, score],
+      robotFeatures: [{ id: "handler", actionIds: [collect.metadata.id, score.metadata.id] }],
+    }, robot({ selectedFeatureIds: ["handler"] }), { recordPlayback: true });
+
+    assert.equal(simulation.getDecisionState().pickupZones[0]?.availableGameObjectCount, 1);
+    simulation.queueActions([{ actionId: collect.metadata.id, parameters: {} }]);
+    let state = simulation.runUntilDecision();
+    assert.deepEqual(state.pickupZones, []);
+    assert.equal(state.enabledActions.some((action) => action.id === collect.metadata.id), false);
+    assert.equal(state.scoreZones[0]?.scoredGameObjectCount, 0);
+
+    simulation.queueActions([{ actionId: collect.metadata.id, parameters: {} }]);
+    const depleted = simulation.advanceOneTick();
+    assert.equal(depleted.status, "blocked");
+    assert.match(depleted.block!.message, /do not have 1 game objects available/);
+    simulation.replaceActions([{ actionId: score.metadata.id, parameters: {} }]);
+    state = simulation.runUntilDecision();
+    assert.deepEqual(state.scoreZones, []);
+    assert.equal(state.enabledActions.some((action) => action.id === score.metadata.id), false);
+    simulation.queueActions([{ actionId: score.metadata.id, parameters: {} }]);
+    const full = simulation.advanceOneTick();
+    assert.equal(full.status, "blocked");
+    assert.match(full.block!.message, /do not have space for 1 game objects/);
+    const finalFrame = simulation.exportPlayback()!.frames.at(-1)!;
+    assert.deepEqual(finalFrame.zoneStates, {
+      source: { kind: "pickup", availableGameObjectCount: 0 },
+      goal: { kind: "score", scoredGameObjectCount: 1 },
+    });
+  });
+
+  test("keeps unlimited zones usable and does not change failed interactions", () => {
+    const failedPickup = createZoneInteractionAction({
+      id: "failed-pickup",
+      description: "Fail to collect",
+      zone: { kind: "pickup" },
+      durationSeconds: 0.1,
+      successProbability: 0,
+    });
+    const simulation = createSimulation({
+      gameObjectTypes: [],
+      zones: [
+        { id: "source", kind: "pickup", shape: { type: "circle", center: { xFeet: 0, yFeet: 0 }, radiusFeet: 1 } },
+        { id: "goal", kind: "score", shape: { type: "circle", center: { xFeet: 0, yFeet: 0 }, radiusFeet: 1 } },
+      ],
+      actions: [failedPickup],
+      robotFeatures: [{ id: "collector", actionIds: [failedPickup.metadata.id] }],
+    }, robot({ selectedFeatureIds: ["collector"] }), { recordPlayback: true });
+
+    simulation.queueActions([{ actionId: failedPickup.metadata.id, parameters: {} }]);
+    const state = simulation.runUntilDecision();
+    assert.equal(state.pickupZones[0]?.availableGameObjectCount, null);
+    assert.equal(state.enabledActions.some((action) => action.id === failedPickup.metadata.id), true);
+    assert.equal(simulation.exportPlayback()!.events.some((event) => event.type === "zone-game-object-count-changed"), false);
+  });
+
+  test("rejects invalid custom zone deltas without partially changing counts", () => {
+    const invalidDeltaAction = (id: string, zoneGameObjectDeltas: Readonly<Record<string, number>>): ActionDefinition<Record<string, never>, null> => ({
+      metadata: { id, description: "Invalid zone delta", zoneKind: "score", zoneIds: ["goal"] },
+      validate: () => ({ valid: true, value: {} }),
+      start: () => ({ ready: true, state: null }),
+      advance: () => ({ state: null, consumedSeconds: 0.1, complete: true, zoneGameObjectDeltas }),
+    });
+    const shape = { type: "circle" as const, center: { xFeet: 0, yFeet: 0 }, radiusFeet: 1 };
+    for (const [delta, message] of [
+      [{ goal: 2 }, /exceeded score zone "goal" capacity/],
+      [{ missing: 1 }, /unknown game-object zone "missing"/],
+    ] as const) {
+      const action = invalidDeltaAction("change-zone", delta);
+      const simulation = createSimulation({
+        gameObjectTypes: [],
+        zones: [{ id: "goal", kind: "score", gameObjectCapacity: 1, shape }],
+        actions: [action],
+        robotFeatures: [{ id: "feature", actionIds: [action.metadata.id] }],
+      }, robot({ selectedFeatureIds: ["feature"] }));
+      simulation.queueActions([{ actionId: action.metadata.id, parameters: {} }]);
+      assert.throws(() => simulation.advanceOneTick(), message);
+      assert.equal(simulation.getDecisionState().scoreZones[0]?.scoredGameObjectCount, 0);
+    }
+  });
+
+  test("recycles multi-object scores into a finite source at the exact delayed time", () => {
+    const collect = createZoneInteractionAction({
+      id: "collect-one",
+      description: "Collect one ball",
+      zone: { kind: "pickup", zoneIds: ["source"] },
+      durationSeconds: 0.1,
+      successProbability: 1,
+    });
+    const score = createZoneInteractionAction({
+      id: "score-two",
+      description: "Score two balls",
+      zone: { kind: "score", zoneIds: ["goal"] },
+      durationSeconds: 0.1,
+      successProbability: 1,
+      gameObjectCountOnSuccess: 2,
+      requiredInventory: { ball: 2 },
+      inventoryDeltaOnSuccess: { ball: -2 },
+    });
+    const wait: ActionDefinition<{ readonly durationSeconds: number }, { readonly elapsedSeconds: number }> = {
+      metadata: { id: "wait", description: "Wait" },
+      validate: (parameters) => typeof parameters === "object" && parameters !== null && "durationSeconds" in parameters
+        && typeof parameters.durationSeconds === "number"
+        ? { valid: true, value: { durationSeconds: parameters.durationSeconds } }
+        : { valid: false, message: "durationSeconds is required" },
+      start: () => ({ ready: true, state: { elapsedSeconds: 0 } }),
+      advance: (_context, request, state, availableSeconds) => {
+        const consumedSeconds = Math.min(availableSeconds, request.durationSeconds - state.elapsedSeconds);
+        const elapsedSeconds = state.elapsedSeconds + consumedSeconds;
+        return { state: { elapsedSeconds }, consumedSeconds, complete: elapsedSeconds >= request.durationSeconds };
+      },
+    };
+    const simulation = createSimulation({
+      timing: { durationSeconds: 2, endgameDurationSeconds: 0 },
+      gameObjectTypes: ["ball"],
+      zones: [
+        { id: "source", kind: "pickup", initialGameObjectCount: 0, shape: { type: "circle", center: { xFeet: 0, yFeet: 0 }, radiusFeet: 1 } },
+        { id: "goal", kind: "score", shape: { type: "circle", center: { xFeet: 0, yFeet: 0 }, radiusFeet: 1 } },
+      ],
+      zoneRecyclingRules: [{ scoreZoneId: "goal", sourceZoneId: "source", delaySeconds: 0.35 }],
+      actions: [collect, score, wait],
+      robotFeatures: [{ id: "handler", actionIds: [collect.metadata.id, score.metadata.id, wait.metadata.id] }],
+    }, robot({
+      inventory: { ball: 2 },
+      totalGameObjectCapacity: 2,
+      selectedFeatureIds: ["handler"],
+    }), { recordPlayback: true });
+
+    simulation.queueActions([
+      { actionId: score.metadata.id, parameters: {} },
+      { actionId: wait.metadata.id, parameters: { durationSeconds: 0.6 } },
+    ]);
+    const state = simulation.runUntilDecision();
+    assert.equal(state.pickupZones[0]?.availableGameObjectCount, 2);
+    assert.equal(state.enabledActions.some((action) => action.id === collect.metadata.id), true);
+    const playback = simulation.exportPlayback()!;
+    const recycled = playback.events.find((event) => event.type === "zone-recycled")!;
+    assertClose(recycled.timeSeconds, 0.45);
+    const recycleFrame = playback.frames.find((frame) => Math.abs(frame.timeSeconds - 0.45) < 1e-9);
+    assert.equal(recycleFrame?.zoneStates.source?.kind, "pickup");
+    assert.equal(recycleFrame?.zoneStates.source?.kind === "pickup"
+      ? recycleFrame.zoneStates.source.availableGameObjectCount
+      : null, 2);
   });
 
   test("supports a typed custom action lifecycle", () => {
@@ -467,6 +677,42 @@ describe("definition validation", () => {
       ...configuration,
       inventoryDeltaOnSuccess: { ball: 1.25 },
     }), /ball inventory delta must be an integer/);
+    assert.throws(() => createZoneInteractionAction({
+      ...configuration,
+      gameObjectCountOnSuccess: 0,
+    }), /game-object count must be a positive integer/);
+  });
+
+  test("rejects invalid zone counts and recycling rules", () => {
+    const shape = { type: "circle" as const, center: { xFeet: 0, yFeet: 0 }, radiusFeet: 1 };
+    assert.throws(() => createSimulation({
+      gameObjectTypes: [], zones: [{ id: "source", kind: "pickup", initialGameObjectCount: -1, shape }],
+    }, robot()), /initial game-object count must be a non-negative integer/);
+    assert.throws(() => createSimulation({
+      gameObjectTypes: [], zones: [{ id: "goal", kind: "score", gameObjectCapacity: 0.5, shape }],
+    }, robot()), /game-object capacity must be a non-negative integer/);
+
+    const zones: GameDefinition["zones"] = [
+      { id: "source", kind: "pickup", initialGameObjectCount: 0, shape },
+      { id: "unlimited-source", kind: "pickup", shape },
+      { id: "goal", kind: "score", shape },
+    ];
+    assert.throws(() => createSimulation({
+      gameObjectTypes: [], zones,
+      zoneRecyclingRules: [{ scoreZoneId: "missing", sourceZoneId: "source", delaySeconds: 1 }],
+    }, robot()), /unknown score zone/);
+    assert.throws(() => createSimulation({
+      gameObjectTypes: [], zones,
+      zoneRecyclingRules: [{ scoreZoneId: "source", sourceZoneId: "goal", delaySeconds: 1 }],
+    }, robot()), /must be a score zone/);
+    assert.throws(() => createSimulation({
+      gameObjectTypes: [], zones,
+      zoneRecyclingRules: [{ scoreZoneId: "goal", sourceZoneId: "unlimited-source", delaySeconds: 1 }],
+    }, robot()), /must have finite initial inventory/);
+    assert.throws(() => createSimulation({
+      gameObjectTypes: [], zones,
+      zoneRecyclingRules: [{ scoreZoneId: "goal", sourceZoneId: "source", delaySeconds: Number.NaN }],
+    }, robot()), /delay must be finite and non-negative/);
   });
 
   test("rejects empty or duplicate game-object, action, and feature IDs", () => {

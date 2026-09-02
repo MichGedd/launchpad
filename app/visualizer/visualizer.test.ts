@@ -1,15 +1,17 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
-import type { PlaybackFrame, RobotState, SimulationPlayback } from "../engine/types.ts";
+import type { PlaybackFrame, RobotState, SimulationPlayback, Zone } from "../engine/types.ts";
 import { NAV_GRID_CELL_SIZE_INCHES } from "../engine/types.ts";
 import {
   calculateEarnedRankingPoints,
   clampPlaybackTime,
   createDemoReplay,
   DEFAULT_ROBOT_CUSTOMIZATION,
+  formatZoneCountLabel,
   getPlaybackFrameAtTime,
   interpolatePlaybackFrame,
   isPlaybackComplete,
+  zoneLabelPosition,
   type ReplayGenerationRequest,
 } from "./index.ts";
 
@@ -62,9 +64,9 @@ const TEST_NAV_GRID = {
 };
 
 const FRAMES: readonly PlaybackFrame[] = [
-  { timeSeconds: 2, robot: robot(0, 0, 0), metrics: metrics(), status: "running" },
-  { timeSeconds: 6, robot: robot(8, 4, 0.5), metrics: metrics(5, 0.5), status: "running" },
-  { timeSeconds: 10, robot: robot(10, 10, 0.75), metrics: metrics(12, 1), status: "complete" },
+  { timeSeconds: 2, robot: robot(0, 0, 0), metrics: metrics(), zoneStates: {}, status: "running" },
+  { timeSeconds: 6, robot: robot(8, 4, 0.5), metrics: metrics(5, 0.5), zoneStates: {}, status: "running" },
+  { timeSeconds: 10, robot: robot(10, 10, 0.75), metrics: metrics(12, 1), zoneStates: {}, status: "complete" },
 ];
 
 describe("visualizer playback utilities", () => {
@@ -91,12 +93,23 @@ describe("visualizer playback utilities", () => {
 
   test("interpolates heading across the zero rotation boundary using the shortest path", () => {
     const simulation = playback([
-      { timeSeconds: 0, robot: robot(0, 0, 0.99), metrics: metrics(), status: "running" },
-      { timeSeconds: 1, robot: robot(0, 0, 0.01), metrics: metrics(), status: "complete" },
+      { timeSeconds: 0, robot: robot(0, 0, 0.99), metrics: metrics(), zoneStates: {}, status: "running" },
+      { timeSeconds: 1, robot: robot(0, 0, 0.01), metrics: metrics(), zoneStates: {}, status: "complete" },
     ]);
     const frame = interpolatePlaybackFrame(simulation, 0.5)!;
     assert.ok(Math.abs(frame.robot.pose.headingRotations - 0) < 1e-9
       || Math.abs(frame.robot.pose.headingRotations - 1) < 1e-9);
+  });
+
+  test("keeps zone counts discrete during interpolation", () => {
+    const simulation = playback([
+      { timeSeconds: 0, robot: robot(0, 0, 0), metrics: metrics(), zoneStates: { source: { kind: "pickup", availableGameObjectCount: 2 } }, status: "running" },
+      { timeSeconds: 1, robot: robot(1, 0, 0), metrics: metrics(), zoneStates: { source: { kind: "pickup", availableGameObjectCount: 1 } }, status: "complete" },
+    ]);
+    const middleState = interpolatePlaybackFrame(simulation, 0.5)?.zoneStates.source;
+    const finalState = interpolatePlaybackFrame(simulation, 1)?.zoneStates.source;
+    assert.equal(middleState?.kind === "pickup" ? middleState.availableGameObjectCount : null, 2);
+    assert.equal(finalState?.kind === "pickup" ? finalState.availableGameObjectCount : null, 1);
   });
 
   test("calculates total earned ranking-point value", () => {
@@ -131,6 +144,45 @@ describe("visualizer playback utilities", () => {
     const empty = playback([]);
     assert.equal(getPlaybackFrameAtTime(empty, 1), null);
     assert.equal(interpolatePlaybackFrame(empty, 1), null);
+  });
+});
+
+describe("zone count labels", () => {
+  const circle: Zone = {
+    id: "source",
+    kind: "pickup",
+    initialGameObjectCount: 5,
+    shape: { type: "circle", center: { xFeet: 2, yFeet: 3 }, radiusFeet: 1 },
+  };
+  const rectangle: Zone = {
+    id: "goal",
+    kind: "score",
+    gameObjectCapacity: 8,
+    shape: { type: "rectangle", center: { xFeet: 7, yFeet: 9 }, widthFeet: 2, heightFeet: 3 },
+  };
+  const polygon: Zone = {
+    id: "unlimited-goal",
+    kind: "score",
+    shape: { type: "polygon", vertices: [{ xFeet: 0, yFeet: 0 }, { xFeet: 6, yFeet: 0 }, { xFeet: 0, yFeet: 6 }] },
+  };
+
+  test("formats finite and unlimited pickup and score counts", () => {
+    assert.deepEqual(formatZoneCountLabel(circle, { kind: "pickup", availableGameObjectCount: 5 }), {
+      compactText: "5 left",
+      accessibleText: "5 game pieces available",
+    });
+    assert.equal(formatZoneCountLabel({ ...circle, initialGameObjectCount: undefined }, { kind: "pickup", availableGameObjectCount: null })?.compactText, "∞");
+    assert.deepEqual(formatZoneCountLabel(rectangle, { kind: "score", scoredGameObjectCount: 3 }), {
+      compactText: "3/8",
+      accessibleText: "3 of 8 game pieces scored",
+    });
+    assert.equal(formatZoneCountLabel(polygon, { kind: "score", scoredGameObjectCount: 4 })?.compactText, "4/∞");
+  });
+
+  test("positions labels at circle, rectangle, and polygon centers", () => {
+    assert.deepEqual(zoneLabelPosition(circle), { xFeet: 2, yFeet: 3 });
+    assert.deepEqual(zoneLabelPosition(rectangle), { xFeet: 7, yFeet: 9 });
+    assert.deepEqual(zoneLabelPosition(polygon), { xFeet: 2, yFeet: 2 });
   });
 });
 

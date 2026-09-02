@@ -18,6 +18,7 @@ export {
 } from "./playback.ts";
 export { createDemoReplay } from "./demo.ts";
 export { calculateEarnedRankingPoints } from "./telemetry.ts";
+export { formatZoneCountLabel, zoneLabelPosition, type ZoneCountLabel } from "./zone-labels.ts";
 export {
   analyzeNavGridReachability,
   clearStoredNavGrid,

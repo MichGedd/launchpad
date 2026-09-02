@@ -37,10 +37,16 @@ test("runs the neutral match through multiple LLM decisions and records optional
   const finalFrame = result.scene.playback.frames.at(-1)!;
   assert.equal(finalFrame.metrics.points, 24);
   assert.deepEqual(finalFrame.robot.inventory, { "game-object": 0 });
+  assert.deepEqual(finalFrame.zoneStates, {
+    "collection-area": { kind: "pickup", availableGameObjectCount: 0 },
+    "scoring-area": { kind: "score", scoredGameObjectCount: 2 },
+  });
   assert.equal(finalFrame.metrics.rankingPoints.collection?.earned, true);
   assert.equal(finalFrame.metrics.rankingPoints.scoring?.earned, true);
   assert.equal(result.scene.playback.events.filter((event) => event.type === "object-collected").length, 2);
   assert.equal(result.scene.playback.events.filter((event) => event.type === "object-scored").length, 2);
+  const exhaustedPrompt = result.debugTrace?.at(-1)?.prompt ?? "";
+  assert.doesNotMatch(exhaustedPrompt, /collection-area|scoring-area|collect-object|score-object/);
 
   const productionResult = await runSimulationWithLlm({ planner, configuration, input });
   assert.equal("debugTrace" in productionResult, false);

@@ -3,6 +3,7 @@ import type {
   VisualizerPreview,
   VisualizerScene,
 } from "~/visualizer";
+import { formatZoneCountLabel, zoneLabelPosition } from "~/visualizer";
 import { LoaderCircleIcon } from "lucide-react";
 
 import { SimulationTelemetry } from "./simulation-telemetry";
@@ -162,6 +163,44 @@ function FieldViewport({
           );
         })}
 
+        {zones.map((zone) => {
+          const label = formatZoneCountLabel(zone, displayedFrame?.zoneStates[zone.id]);
+          if (label === null) return null;
+          const position = zoneLabelPosition(zone);
+          const width = Math.max(2.4, label.compactText.length * 0.48 + 1.1);
+          return (
+            <g
+              aria-label={label.accessibleText}
+              className="pointer-events-none"
+              key={`${zone.id}-count`}
+              role="img"
+              transform={`translate(${position.xFeet} ${field.heightFeet - position.yFeet})`}
+            >
+              <title>{`${zone.id}: ${label.accessibleText}`}</title>
+              <rect
+                fill="rgba(25,29,31,0.78)"
+                height="1.25"
+                rx="0.5"
+                stroke="rgba(255,255,255,0.28)"
+                strokeWidth="0.08"
+                width={width}
+                x={-width / 2}
+                y="-0.625"
+              />
+              <text
+                dominantBaseline="central"
+                fill="white"
+                fontFamily="Geist Variable, Geist, sans-serif"
+                fontSize="0.68"
+                fontWeight="600"
+                textAnchor="middle"
+              >
+                {label.compactText}
+              </text>
+            </g>
+          );
+        })}
+
         {displayedFrame ? (
           <g
             data-robot="true"
@@ -188,6 +227,13 @@ function FieldViewport({
           </g>
         ) : null}
       </svg>
+
+      <ul aria-label="Zone game object counts" className="sr-only">
+        {zones.map((zone) => {
+          const label = formatZoneCountLabel(zone, displayedFrame?.zoneStates[zone.id]);
+          return label ? <li key={`${zone.id}-accessible-count`}>{`${zone.id}: ${label.accessibleText}`}</li> : null;
+        })}
+      </ul>
 
       <div className="pointer-events-none absolute left-5 top-5 rounded-xl border border-white/12 bg-black/25 px-3 py-2 text-[11px] font-medium uppercase tracking-[0.16em] text-white/70 backdrop-blur-xl">
         Neutral field · {field.widthFeet} × {field.heightFeet} ft

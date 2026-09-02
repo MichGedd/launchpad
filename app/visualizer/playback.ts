@@ -65,6 +65,7 @@ export function interpolatePlaybackFrame(
     timeSeconds: time,
     robot: copyInterpolatedRobot(lower.robot, upper.robot, progress),
     metrics: lower.metrics,
+    zoneStates: lower.zoneStates,
     status: lower.status,
   };
 }

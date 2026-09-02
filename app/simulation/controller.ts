@@ -217,5 +217,7 @@ function madeProgress(before: DecisionState, after: DecisionState): boolean {
     || before.robot.pose.xFeet !== after.robot.pose.xFeet
     || before.robot.pose.yFeet !== after.robot.pose.yFeet
     || before.robot.pose.headingRotations !== after.robot.pose.headingRotations
-    || JSON.stringify(before.robot.inventory) !== JSON.stringify(after.robot.inventory);
+    || JSON.stringify(before.robot.inventory) !== JSON.stringify(after.robot.inventory)
+    || JSON.stringify(before.pickupZones) !== JSON.stringify(after.pickupZones)
+    || JSON.stringify(before.scoreZones) !== JSON.stringify(after.scoreZones);
 }

@@ -48,12 +48,14 @@ const DEMO_ZONES: readonly Zone[] = Object.freeze([
     id: "collection-area",
     kind: "pickup",
     tags: ["game-object"],
+    initialGameObjectCount: 2,
     shape: { type: "circle", center: { xFeet: 18, yFeet: 5 }, radiusFeet: 2 },
   },
   {
     id: "scoring-area",
     kind: "score",
     tags: ["game-object"],
+    gameObjectCapacity: 2,
     shape: { type: "rectangle", center: { xFeet: 38, yFeet: 18 }, widthFeet: 6, heightFeet: 4 },
   },
 ]);
@@ -93,11 +95,17 @@ function robotFrame(
   matchMetrics: MatchMetrics,
   customization: RobotCustomization,
   inventory: Readonly<Record<string, number>> = DEMO_ROBOT_CAPABILITIES.inventory,
+  availableGameObjectCount = 2,
+  scoredGameObjectCount = 0,
 ): PlaybackFrame {
   return {
     timeSeconds,
     robot: { ...DEMO_ROBOT_CAPABILITIES, ...customization, inventory, pose: robotPose },
     metrics: matchMetrics,
+    zoneStates: {
+      "collection-area": { kind: "pickup", availableGameObjectCount },
+      "scoring-area": { kind: "score", scoredGameObjectCount },
+    },
     status,
   };
 }
@@ -174,6 +182,8 @@ export async function createDemoReplay(request: ReplayGenerationRequest): Promis
       waypoint.metrics,
       request.robotCustomization,
       waypoint.inventory,
+      index < 2 ? 2 : 1,
+      index < 3 ? 0 : 1,
     )),
   );
   const durationSeconds = times.at(-1)!;
