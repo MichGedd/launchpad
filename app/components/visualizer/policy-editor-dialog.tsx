@@ -14,6 +14,8 @@ import type {
   PolicyPhase,
   PolicyRule,
 } from "~/policy";
+import type { RobotFeatureOption } from "~/visualizer";
+import { createPolicyCapabilityViewModel, getPolicyGoalSelectionState } from "./policy-capabilities";
 import {
   addPolicyRule,
   deletePolicyRule,
@@ -27,6 +29,8 @@ interface PolicyEditorDialogProps {
   readonly policy: PolicyDefinition;
   readonly onOpenChange: (open: boolean) => void;
   readonly onSave: (policy: PolicyDefinition) => void;
+  readonly featureOptions: readonly RobotFeatureOption[];
+  readonly selectedFeatureIds: readonly string[];
 }
 
 const catalog = createNeutralPolicyCatalog();
@@ -35,7 +39,7 @@ function goalLabel(goalId: string): string {
   return NEUTRAL_POLICY_GOALS.find((goal) => goal.id === goalId)?.label ?? goalId;
 }
 
-export function PolicyEditorDialog({ open, policy, onOpenChange, onSave }: PolicyEditorDialogProps) {
+export function PolicyEditorDialog({ open, policy, onOpenChange, onSave, featureOptions, selectedFeatureIds }: PolicyEditorDialogProps) {
   const [draft, setDraft] = useState<PolicyDefinition>(policy);
   const [phase, setPhase] = useState<PolicyPhase>("match");
 
@@ -71,6 +75,7 @@ export function PolicyEditorDialog({ open, policy, onOpenChange, onSave }: Polic
   }
 
   const currentPhase = draft[phase];
+  const capabilityView = createPolicyCapabilityViewModel(draft, catalog, featureOptions, selectedFeatureIds);
 
   return (
     <DialogContent className="max-h-[88svh] max-w-4xl overflow-y-auto">
@@ -80,6 +85,12 @@ export function PolicyEditorDialog({ open, policy, onOpenChange, onSave }: Polic
       </DialogHeader>
 
       <div className="mt-6 space-y-5">
+        <div aria-label="Policy capability summary" className="rounded-2xl border border-border bg-muted/40 p-3 text-xs text-muted-foreground" role="status">
+          <span className="font-semibold text-foreground">Capabilities:</span>{" "}
+          {capabilityView.missingUseCount === 0
+            ? "all current rule and fallback goals have their required features selected."
+            : `${capabilityView.missingUseCount} current goal use${capabilityView.missingUseCount === 1 ? " is" : "s are"} missing a selected feature.`}
+        </div>
         <div>
           <label className="text-xs font-medium" htmlFor="policy-editor-name">Policy name</label>
           <input
@@ -117,6 +128,8 @@ export function PolicyEditorDialog({ open, policy, onOpenChange, onSave }: Polic
               onDown={() => setDraft((current) => movePolicyRule(current, phase, index, index + 1))}
               onRuleChange={(next) => updateRule(index, () => next)}
               onUp={() => setDraft((current) => movePolicyRule(current, phase, index, index - 1))}
+              featureOptions={featureOptions}
+              selectedFeatureIds={selectedFeatureIds}
             />
           ))}
           <Button
@@ -139,8 +152,16 @@ export function PolicyEditorDialog({ open, policy, onOpenChange, onSave }: Polic
             onChange={(event) => updatePhase((current) => ({ ...current, fallback: { goalId: event.target.value, parameters: {} } }))}
             value={currentPhase.fallback.goalId}
           >
-            {NEUTRAL_POLICY_GOALS.map((goal) => <option key={goal.id} value={goal.id}>{goal.label}</option>)}
+            {NEUTRAL_POLICY_GOALS.map((goal) => {
+              const selection = getPolicyGoalSelectionState(goal.id, currentPhase.fallback.goalId, catalog, featureOptions, selectedFeatureIds);
+              return <option disabled={selection.disabled} key={goal.id} value={goal.id}>{goal.label}{selection.requiredFeatureLabels.length > 0 ? ` — requires ${selection.requiredFeatureLabels.join(", ")}` : ""}</option>;
+            })}
           </select>
+          {getPolicyGoalSelectionState(currentPhase.fallback.goalId, currentPhase.fallback.goalId, catalog, featureOptions, selectedFeatureIds).missingFeatureLabels.length > 0 ? (
+            <p className="mt-2 text-xs text-amber-200" role="alert">
+              Fallback goal unavailable: Requires {getPolicyGoalSelectionState(currentPhase.fallback.goalId, currentPhase.fallback.goalId, catalog, featureOptions, selectedFeatureIds).missingFeatureLabels.join(", ")}. This phase may fail if no earlier rule resolves.
+            </p>
+          ) : null}
         </div>
 
         <p aria-live="polite" className={validationMessage ? "text-sm text-red-400" : "text-sm text-muted-foreground"}>
@@ -166,9 +187,11 @@ interface RuleCardProps {
   readonly onDelete: () => void;
   readonly onUp: () => void;
   readonly onDown: () => void;
+  readonly featureOptions: readonly RobotFeatureOption[];
+  readonly selectedFeatureIds: readonly string[];
 }
 
-function RuleCard({ rule, index, total, onRuleChange, onDelete, onUp, onDown }: RuleCardProps) {
+function RuleCard({ rule, index, total, onRuleChange, onDelete, onUp, onDown, featureOptions, selectedFeatureIds }: RuleCardProps) {
   function updateCondition(conditionIndex: number, update: (condition: PolicyRule["conditions"][number]) => PolicyRule["conditions"][number]) {
     onRuleChange({ ...rule, conditions: rule.conditions.map((condition, itemIndex) => itemIndex === conditionIndex ? update(condition) : condition) });
   }
@@ -215,9 +238,17 @@ function RuleCard({ rule, index, total, onRuleChange, onDelete, onUp, onDown }: 
       <div className="mt-4">
         <label className="text-xs font-medium" htmlFor={`goal-${index}`}>Goal</label>
         <select className="mt-1.5 h-9 w-full rounded-lg border border-border bg-background px-2.5 text-sm" id={`goal-${index}`} onChange={(event) => onRuleChange({ ...rule, goal: { goalId: event.target.value, parameters: {} } })} value={rule.goal.goalId}>
-          {NEUTRAL_POLICY_GOALS.map((goal) => <option key={goal.id} value={goal.id}>{goal.label}</option>)}
+          {NEUTRAL_POLICY_GOALS.map((goal) => {
+            const selection = getPolicyGoalSelectionState(goal.id, rule.goal.goalId, catalog, featureOptions, selectedFeatureIds);
+            return <option disabled={selection.disabled} key={goal.id} value={goal.id}>{goal.label}{selection.requiredFeatureLabels.length > 0 ? ` — requires ${selection.requiredFeatureLabels.join(", ")}` : ""}</option>;
+          })}
         </select>
         <p className="mt-1 text-xs text-muted-foreground">{goalLabel(rule.goal.goalId)}</p>
+        {getPolicyGoalSelectionState(rule.goal.goalId, rule.goal.goalId, catalog, featureOptions, selectedFeatureIds).missingFeatureLabels.length > 0 ? (
+          <p className="mt-1 text-xs text-amber-200" role="alert">
+            Rule goal unavailable: Requires {getPolicyGoalSelectionState(rule.goal.goalId, rule.goal.goalId, catalog, featureOptions, selectedFeatureIds).missingFeatureLabels.join(", ")}. This rule will be skipped if evaluated.
+          </p>
+        ) : null}
       </div>
     </article>
   );

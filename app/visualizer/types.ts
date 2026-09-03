@@ -20,10 +20,17 @@ export interface FieldBackgroundImage {
 }
 
 /** A selectable, typed capability presented to a strategy author. */
+export interface RobotFeaturePolicyImpact {
+  readonly kind: "indirect";
+  readonly description: string;
+}
+
 export interface RobotFeatureOption {
   readonly id: string;
   readonly label: string;
   readonly description: string;
+  /** Presentation-only context; this does not enable goals or alter simulation rules. */
+  readonly policyImpact?: RobotFeaturePolicyImpact;
 }
 
 /** Season-independent dimensions and motion limits used by a visualizer replay. */
@@ -74,6 +81,10 @@ export const DEFAULT_ROBOT_FEATURE_OPTIONS: readonly RobotFeatureOption[] = Obje
     id: "drive-planning",
     label: "Drive planning",
     description: "Plan efficient paths between points on the field.",
+    policyImpact: {
+      kind: "indirect",
+      description: "Expands legal routes between goals; it does not unlock a goal.",
+    },
   },
   {
     id: "object-intake",

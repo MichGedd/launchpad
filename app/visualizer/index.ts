@@ -6,6 +6,7 @@ export {
   type ReplayGenerationRequest,
   type ReplayGenerator,
   type RobotCustomization,
+  type RobotFeaturePolicyImpact,
   type RobotFeatureOption,
   type VisualizerScene,
   type VisualizerPreview,

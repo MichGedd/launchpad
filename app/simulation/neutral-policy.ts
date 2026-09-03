@@ -229,11 +229,13 @@ function targetGoal(
   kind: "pickup" | "score",
   tags: readonly string[],
   verb: string,
+  requiredFeatureId: string,
 ): PolicyGoalDefinition<NeutralPolicyRequest> {
   return {
     id,
     label: verb,
     description: `Choose the nearest legal ${verb.toLowerCase()} target.`,
+    requiredFeatureIds: [requiredFeatureId],
     validate: validateEmpty,
     isAvailable(context) {
       const target = selectNearest(context, actionId, kind, tags);
@@ -257,13 +259,14 @@ function targetGoal(
   };
 }
 
-const collectGoal = targetGoal(COLLECT_NEAREST_OBJECT_GOAL_ID, "collect-object", "pickup", ["game-object"], "Collect nearest object");
-const scoreGoal = targetGoal(SCORE_NEAREST_OBJECT_GOAL_ID, "score-object", "score", ["game-object"], "Score nearest object");
+const collectGoal = targetGoal(COLLECT_NEAREST_OBJECT_GOAL_ID, "collect-object", "pickup", ["game-object"], "Collect nearest object", "object-intake");
+const scoreGoal = targetGoal(SCORE_NEAREST_OBJECT_GOAL_ID, "score-object", "score", ["game-object"], "Score nearest object", "goal-scoring");
 
 const parkGoal: PolicyGoalDefinition<NeutralPolicyRequest> = {
   id: PARK_FOR_ENDGAME_GOAL_ID,
   label: "Park for endgame",
   description: "Drive to the nearest legal endgame parking area, park, and wait.",
+  requiredFeatureIds: ["endgame-parking"],
   validate: validateEmpty,
   isAvailable(context) {
     if (!context.decision.endgameActive) return unavailable("Endgame has not started.");
@@ -291,6 +294,7 @@ const waitGoal: PolicyGoalDefinition<NeutralPolicyRequest> = {
   id: WAIT_UNTIL_MATCH_END_GOAL_ID,
   label: "Wait until match end",
   description: "Wait for the remaining match duration.",
+  requiredFeatureIds: [],
   validate: validateEmpty,
   isAvailable: (context) => actionFor(context, "wait")
     ? { available: true, explanation: "The neutral wait action is enabled." }

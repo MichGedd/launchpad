@@ -69,6 +69,8 @@ export interface PolicyGoalDefinition<Request, Context = PolicyEvaluationContext
   readonly id: string;
   readonly label: string;
   readonly description: string;
+  /** Presentation metadata describing feature capabilities required by this goal. */
+  readonly requiredFeatureIds: readonly string[];
   validate(parameters: unknown): ValidationResult<Request>;
   isAvailable(context: Context, request: Request): PolicyGoalAvailability;
   expand(context: Context, request: Request): GoalPlan;

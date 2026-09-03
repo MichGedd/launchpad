@@ -137,6 +137,11 @@ export class PolicyCatalog<Request, Context = import("./types.ts").PolicyEvaluat
     return this.#goals.get(id);
   }
 
+  /** Return the registered goals for presentation and editor consumers. */
+  goals(): readonly PolicyGoalDefinition<Request, Context>[] {
+    return [...this.#goals.values()];
+  }
+
   validatePolicy(policy: unknown): PolicyDefinition {
     if (typeof policy !== "object" || policy === null) throw new PolicyValidationError("Policy must be an object.");
     const candidate = policy as PolicyDefinition;
@@ -167,10 +172,24 @@ function registerDefinitions<Request, Context, Definition extends PolicyConditio
     if (typeof definition.id !== "string" || definition.id.length < 1 || definition.id.length > POLICY_ID_MAX_LENGTH) {
       throw new Error(`${kind} definition IDs must be 1-${POLICY_ID_MAX_LENGTH} characters.`);
     }
+    if (kind === "goal") validateRequiredFeatureIds(definition as PolicyGoalDefinition<Request, Context>);
     if (result.has(definition.id)) throw new Error(`Duplicate policy ${kind} definition ID "${definition.id}".`);
     result.set(definition.id, definition);
   }
   return result;
+}
+
+function validateRequiredFeatureIds<Request, Context>(definition: PolicyGoalDefinition<Request, Context>): void {
+  const featureIds = definition.requiredFeatureIds;
+  if (!Array.isArray(featureIds)) throw new Error(`Policy goal "${definition.id}" requiredFeatureIds must be an array.`);
+  const seen = new Set<string>();
+  for (const featureId of featureIds) {
+    if (typeof featureId !== "string" || featureId.trim().length < 1 || featureId.length > POLICY_ID_MAX_LENGTH) {
+      throw new Error(`Policy goal "${definition.id}" required feature IDs must be 1-${POLICY_ID_MAX_LENGTH} characters.`);
+    }
+    if (seen.has(featureId)) throw new Error(`Policy goal "${definition.id}" has duplicate required feature ID "${featureId}".`);
+    seen.add(featureId);
+  }
 }
 
 export function validationFailure(message: string): ValidationResult<never> {

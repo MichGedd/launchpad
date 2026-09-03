@@ -39,11 +39,12 @@ const condition: PolicyConditionDefinition<TestRequest, TestContext> = {
   },
 };
 
-function goal(id: string, available = true): PolicyGoalDefinition<TestRequest, TestContext> {
+function goal(id: string, available = true, requiredFeatureIds: readonly string[] = []): PolicyGoalDefinition<TestRequest, TestContext> {
   return {
     id,
     label: id,
     description: `Test goal ${id}.`,
+    requiredFeatureIds,
     validate: () => ({ valid: true, value: {} }),
     isAvailable: () => ({ available, explanation: available ? "Goal is available." : "Goal is unavailable." }),
     expand: () => ({
@@ -77,6 +78,12 @@ function policy(overrides: Partial<PolicyDefinition> = {}): PolicyDefinition {
 function catalog(...goals: readonly PolicyGoalDefinition<TestRequest, TestContext>[]): PolicyCatalog<TestRequest, TestContext> {
   return new PolicyCatalog({ conditions: [condition], goals });
 }
+
+test("validates required feature metadata when registering policy goals", () => {
+  assert.throws(() => catalog(goal("empty-feature", true, [""])), /required feature IDs/);
+  assert.throws(() => catalog(goal("long-feature", true, ["x".repeat(129)])), /required feature IDs/);
+  assert.throws(() => catalog(goal("duplicate-feature", true, ["intake", "intake"])), /duplicate required feature ID/);
+});
 
 test("validates policy limits, JSON parameters, and duplicate rule IDs", () => {
   const validCatalog = catalog(goal("first"), goal("fallback"));

@@ -41,7 +41,7 @@ import {
   simulationGenerationInputFingerprint,
   type SimulationGenerationInputs,
 } from "~/simulation";
-import { DEFAULT_NEUTRAL_POLICY, generateSimulation } from "~/simulation";
+import { createNeutralPolicyCatalog, DEFAULT_NEUTRAL_POLICY, generateSimulation } from "~/simulation";
 
 import { FieldViewport } from "./field-viewport";
 import { ReplayDetails } from "./replay-details";
@@ -49,8 +49,10 @@ import { RobotCustomizationDialog } from "./robot-customization-dialog";
 import { FieldEditorDialog } from "./field-editor-dialog";
 import { PolicyDecisionsDialog } from "./policy-decisions-dialog";
 import { PolicyEditorDialog } from "./policy-editor-dialog";
+import { createPolicyCapabilityViewModel } from "./policy-capabilities";
 
 const PLAYBACK_SPEEDS = [0.5, 1, 2] as const;
+const POLICY_CATALOG = createNeutralPolicyCatalog();
 
 interface VisualizerWorkspaceProps {
   readonly features: readonly RobotFeatureOption[];
@@ -70,6 +72,10 @@ function VisualizerWorkspace({
   const [policy, setPolicy] = useState<PolicyDefinition>(() => structuredClone(DEFAULT_NEUTRAL_POLICY));
   const [selectedFeatureIds, setSelectedFeatureIds] = useState<readonly string[]>(
     features.map((feature) => feature.id),
+  );
+  const capabilityView = useMemo(
+    () => createPolicyCapabilityViewModel(policy, POLICY_CATALOG, features, selectedFeatureIds),
+    [features, policy, selectedFeatureIds],
   );
   const [robotCustomization, setRobotCustomization] = useState<RobotCustomization>(
     DEFAULT_ROBOT_CUSTOMIZATION,
@@ -261,6 +267,11 @@ function VisualizerWorkspace({
               <p className="mt-1 text-xs text-muted-foreground">
                 {policy.match.rules.length} match rules · {policy.endgame.rules.length} endgame rules · ordered deterministic goals
               </p>
+              <p aria-label="Policy capability summary" className={`mt-1 text-xs ${capabilityView.missingUseCount > 0 ? "text-amber-100" : "text-muted-foreground"}`}>
+                {capabilityView.missingUseCount === 0
+                  ? "All current goal uses have their required features selected."
+                  : `${capabilityView.missingUseCount} current goal use${capabilityView.missingUseCount === 1 ? " is" : "s are"} missing a selected feature.`}
+              </p>
             </div>
             <div className="flex items-center gap-2">
               <Button aria-label="Edit policy" className="h-10 rounded-xl px-3 text-sm" disabled={isGenerating} onClick={() => setIsPolicyEditorOpen(true)} type="button" variant="ghost">
@@ -314,14 +325,23 @@ function VisualizerWorkspace({
             <div className="min-h-0 flex-1 space-y-2 overflow-y-auto p-3 [@media(max-height:600px)]:space-y-1 [@media(max-height:600px)]:p-2">
               {features.map((feature) => {
                 const isSelected = selectedFeatureIds.includes(feature.id);
+                const capability = capabilityView.features.find((item) => item.featureId === feature.id)!;
+                const useCount = capability.ruleUseCount + capability.fallbackUseCount;
+                const isMissingUsedFeature = !isSelected && capability.missingUses.length > 0;
+                const featureStatus = isMissingUsedFeature
+                  ? "required by the current policy but not selected"
+                  : isSelected ? "selected" : "not selected";
+                const relatedGoalSummary = capability.relatedGoals.length > 0
+                  ? `Enables ${capability.relatedGoals.map((goal) => goal.label).join(", ")}`
+                  : capability.policyImpact?.description ?? "No direct policy goal relationship";
                 return (
                   <label
-                    className={`group flex cursor-pointer items-start rounded-2xl border transition-colors ${isFeatureRailCollapsed ? "justify-center p-2.5" : "gap-3 p-3 [@media(max-height:600px)]:p-2"} ${isSelected ? "border-[#6e8ce1]/55 bg-[#21409a]/28" : "border-white/8 bg-white/4 hover:bg-white/8"}`}
+                    className={`group flex cursor-pointer items-start rounded-2xl border transition-colors ${isFeatureRailCollapsed ? "justify-center p-2.5" : "gap-3 p-3 [@media(max-height:600px)]:p-2"} ${isMissingUsedFeature ? "border-amber-300/70 bg-amber-400/15" : isSelected ? "border-[#6e8ce1]/55 bg-[#21409a]/28" : "border-white/8 bg-white/4 hover:bg-white/8"}`}
                     key={feature.id}
-                    title={isFeatureRailCollapsed ? feature.label : undefined}
+                    title={isFeatureRailCollapsed ? `${feature.label}: ${relatedGoalSummary}; ${featureStatus}` : undefined}
                   >
                     <input
-                      aria-label={feature.label}
+                      aria-label={`${feature.label} (${featureStatus})`}
                       checked={isSelected}
                       className="sr-only"
                       disabled={isGenerating}
@@ -335,6 +355,23 @@ function VisualizerWorkspace({
                       <span className="min-w-0">
                         <span className="block text-sm font-medium">{feature.label}</span>
                         <span className="mt-1 block text-xs leading-4 text-muted-foreground [@media(max-height:560px)]:hidden">{feature.description}</span>
+                        {capability.relatedGoals.length > 0 ? (
+                          <span aria-label={`Related policy goals for ${feature.label}`} className="mt-1.5 flex flex-wrap gap-1">
+                            {capability.relatedGoals.map((goal) => (
+                              <span className="rounded-md bg-[#21409a]/30 px-1.5 py-0.5 text-[10px] font-medium text-[#c5d0ff]" key={goal.goalId}>
+                                Enables {goal.label}
+                              </span>
+                            ))}
+                          </span>
+                        ) : capability.policyImpact ? (
+                          <span className="mt-1.5 block text-xs leading-4 text-muted-foreground">{capability.policyImpact.description}</span>
+                        ) : null}
+                        {useCount > 0 ? (
+                          <span className={`mt-1 block text-xs leading-4 ${isMissingUsedFeature ? "font-medium text-amber-100" : "text-muted-foreground"}`}>
+                            Policy use: {capability.ruleUseCount} rule{capability.ruleUseCount === 1 ? "" : "s"}, {capability.fallbackUseCount} fallback{capability.fallbackUseCount === 1 ? "" : "s"}
+                            {isMissingUsedFeature ? " · select this feature to enable its use" : ""}
+                          </span>
+                        ) : null}
                       </span>
                     )}
                   </label>
@@ -533,6 +570,7 @@ function VisualizerWorkspace({
 
       <Dialog onOpenChange={setIsPolicyEditorOpen} open={isPolicyEditorOpen}>
         <PolicyEditorDialog
+          featureOptions={features}
           onOpenChange={setIsPolicyEditorOpen}
           onSave={(nextPolicy) => {
             setPolicy(nextPolicy);
@@ -543,6 +581,7 @@ function VisualizerWorkspace({
           }}
           open={isPolicyEditorOpen}
           policy={policy}
+          selectedFeatureIds={selectedFeatureIds}
         />
       </Dialog>
       <Dialog onOpenChange={setIsPolicyDecisionsOpen} open={isPolicyDecisionsOpen}>
