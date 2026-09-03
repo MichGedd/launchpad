@@ -4,7 +4,7 @@ The Launchpad simulation engine is a synchronous, headless TypeScript library. I
 
 When a `GameDefinition` supplies a `navGrid`, `drive-to` actions are routed through a cached, conservative A* occupancy grid at the fixed `NAV_GRID_CELL_SIZE_INCHES` (0.5 inch) fidelity. The drive request remains a destination pose; generated grid cells and route waypoints are internal engine details. A NavGrid uses portable rectangle and circle zones with either `general` or `feature-specific` traversal rules. Omitting `navGrid` retains the legacy direct-drive and collision behavior for backwards compatibility.
 
-The engine has no React, browser, visualization, or LLM dependency. A controller supplies action queues, and a future visualizer can consume the optional playback data.
+The engine has no React, browser, visualization, policy, or LLM dependency. A controller supplies action queues, and the visualizer consumes optional playback data. The primary application controller evaluates deterministic policies, while the retained LLM controller uses the same engine boundary for regression comparison.
 
 ## Conventions and defaults
 
@@ -14,6 +14,7 @@ The engine has no React, browser, visualization, or LLM dependency. A controller
 - Headings are normalized to the range `[0, 1)`.
 - The default update duration is `0.2` seconds of game time.
 - A default match lasts `135` seconds, with endgame active during the final `30` seconds.
+- Endgame-boundary interruption is opt-in. Existing controllers cross the boundary normally unless `interruptAtEndgameStart` is enabled.
 - The default robot is `28.5 × 28.5` inches, translates at `15 ft/s`, and spins at `1 rotation/s`.
 - Translation and rotation occur concurrently. A drive finishes when both have reached their targets.
 
@@ -94,12 +95,12 @@ npm run test
 1. Create a `GameDefinition` and `RobotConfiguration`.
 2. Call `createSimulation`.
 3. Submit a batch with `queueActions`.
-4. Call `runUntilDecision` to execute actions until the queue is empty, an action blocks, or match time expires.
+4. Call `runUntilDecision` to execute actions until the queue is empty, an action blocks, match time expires, or an enabled exact endgame boundary requests reevaluation.
 5. Inspect the returned `DecisionState`.
-6. When the status is `awaiting-actions`, queue another batch. When it is `blocked`, inspect `state.block` and call `replaceActions` to replace the active and remaining actions.
+6. When the status is `awaiting-actions`, inspect `state.decisionReason` and queue another batch. When it is `blocked`, inspect `state.block` and call `replaceActions` to replace the active and remaining actions.
 7. Continue until the status is `complete`.
 
-LLM computation and other controller work do not consume simulation time. If a queue ends partway through a 200 ms update, the unused portion is preserved and applied when the next queue arrives.
+Policy evaluation, LLM computation, and other controller work do not consume simulation time. If a queue ends partway through a 200 ms update, the unused portion is preserved and applied when the next queue arrives.
 
 `queueActions` validates the entire batch before adding anything. If any request is unknown, disabled, or malformed, the result is rejected and none of the requests are queued.
 
@@ -156,6 +157,7 @@ in decision state and playback frames. Ranking-point progress is clamped to
 | `seed` | `1` | Seed for deterministic action probabilities. Use different seeds for different aggregate runs. |
 | `recordPlayback` | `false` | Retains immutable frames and events when enabled. |
 | `tickSeconds` | `0.2` | Simulation update duration. Production games should normally keep the 200 ms default. |
+| `interruptAtEndgameStart` | `false` | Stops exactly at endgame start, clears active/queued work, records boundary events, and requests new actions. Deterministic policy controllers enable this; legacy behavior remains the default. |
 
 ### Engine methods
 
@@ -164,7 +166,7 @@ in decision state and playback frames. Ranking-point progress is clamped to
 | `queueActions(requests)` | Atomically validates and appends a batch. Returns a `QueueResult`. |
 | `replaceActions(requests)` | Atomically validates a batch, then replaces the active and queued actions and clears a block. |
 | `advanceOneTick()` | Advances by at most one update budget, or until the engine needs a decision. |
-| `runUntilDecision()` | Repeatedly advances until status is `awaiting-actions`, `blocked`, or `complete`. |
+| `runUntilDecision()` | Repeatedly advances until status is `awaiting-actions`, `blocked`, or `complete`, including exact endgame reevaluation when enabled. |
 | `getDecisionState()` | Returns the current state without advancing simulated time. |
 | `exportPlayback()` | Returns a deeply frozen `SimulationPlayback`, or `null` when recording is disabled. |
 
@@ -178,6 +180,17 @@ in decision state and playback frames. Ranking-point progress is clamped to
 | `complete` | Match time reached zero. No more actions will execute. |
 
 At match expiration, the engine records an `action-interrupted` event for an unfinished action and a `simulation-complete` event.
+
+Every `DecisionState` also includes a `decisionReason`:
+
+| Reason | Meaning |
+| --- | --- |
+| `queue-empty` | No active or queued action remains. |
+| `blocked` | The active action could not start or continue. |
+| `endgame-start` | Opt-in boundary handling interrupted the previous plan and requires phase reevaluation. |
+| `match-complete` | Match time reached zero. |
+
+With `interruptAtEndgameStart: true`, the engine advances by a partial tick when necessary so elapsed time lands exactly at `durationSeconds - endgameDurationSeconds`. It interrupts an active action, discards the remaining queue, emits `action-interrupted` when an action was active followed by `queued-actions-cleared` and `endgame-started`, records a playback frame, and returns `awaiting-actions` with `decisionReason: "endgame-start"`. With the option disabled, boundary crossing preserves the pre-existing behavior.
 
 ## Actions and robot features
 
@@ -212,6 +225,34 @@ const robot = {
 ```
 
 An action that exists but is not enabled by a selected feature is rejected just like an unknown action. This prevents a controller from inventing robot capabilities.
+
+### Reusable wait action
+
+Use `createWaitAction()` when a controller or adapter needs the engine's neutral `wait` action:
+
+```ts
+const waitAction = createWaitAction();
+
+const game = {
+  gameObjectTypes: [],
+  zones: [],
+  actions: [waitAction],
+  robotFeatures: [{ id: "controller-basics", actionIds: ["wait"] }],
+} satisfies GameDefinition;
+
+const robot = {
+  initialPose: { xFeet: 0, yFeet: 0, headingRotations: 0 },
+  totalGameObjectCapacity: 0,
+  selectedFeatureIds: ["controller-basics"],
+} satisfies RobotConfiguration;
+
+const simulation = createSimulation(game, robot);
+simulation.queueActions([
+  { actionId: "wait", parameters: { durationSeconds: 5 } },
+]);
+```
+
+The helper validates a finite, non-negative duration and advances without moving or changing game state. Optional ID and description arguments support adapters that need different action metadata without duplicating the lifecycle implementation.
 
 ### Declarative zone interactions
 
@@ -298,7 +339,7 @@ const waitAction: ActionDefinition<WaitRequest, WaitState> = {
 
 - `validate` converts untrusted parameters into the action's request type.
 - `start` checks preconditions. Returning `ready: false` blocks the queue without consuming time.
-- `advance` receives immutable robot and zone-state snapshots, zone definitions, current simulation time, seeded random function, contact helper, and the remaining time budget.
+- `advance` receives immutable robot and zone-state snapshots, zone definitions, elapsed time, time remaining, endgame state, seeded random function, contact helper, and the remaining time budget.
 - `consumedSeconds` must be finite, non-negative, and no greater than `availableSeconds`.
 - An incomplete action must consume time; otherwise the engine throws to prevent an infinite loop.
 - `inventoryDelta`, `pointsDelta`, `rankingPointProgressDelta`, and custom
@@ -357,7 +398,7 @@ For legacy games without a NavGrid, drive movement still uses swept collision ch
 
 `getDecisionState`, `advanceOneTick`, and `runUntilDecision` return a `DecisionState` containing:
 
-- Simulation status, elapsed time, remaining time, and endgame state.
+- Simulation status, `decisionReason`, elapsed time, remaining time, and endgame state.
 - Robot pose, footprint configuration, speeds, capacities, and inventory.
 - Cumulative points and per-type ranking-point progress in `metrics`.
 - Active and queued action summaries.
@@ -394,6 +435,8 @@ Engine-generated events include:
 - `action-completed`
 - `action-blocked`
 - `action-interrupted`
+- `queued-actions-cleared`
+- `endgame-started`
 - `inventory-changed`
 - `points-changed`
 - `ranking-point-progress-changed`

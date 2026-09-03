@@ -14,14 +14,15 @@ Do not add physical complexity unless it is necessary to compare strategies and 
 
 ## Product architecture
 
-The product has two primary parts:
+The product has three primary parts:
 
 1. A headless simulation engine that can execute many runs and report aggregate results such as average points and ranking points earned.
-2. A graphical visualizer that displays one simulation of a robot moving around the field and executing a strategy.
+2. A deterministic policy subsystem that validates student-authored rules, resolves semantic goals into engine action queues, and explains every decision.
+3. A graphical visualizer that displays one simulation of a robot moving around the field and executing a policy.
 
-An LLM makes in-simulation decisions. Students describe a strategy and select predefined robot features; they do not make real-time gameplay decisions during a run.
+Students construct ordered Match and Endgame policies and select predefined robot features; they do not make real-time gameplay decisions during a run. The primary UI and `/api/simulation` path must execute deterministically with zero model-provider calls. The retained LLM controller exists for regression comparison and a possible separately approved natural-language policy compiler, not as the primary runtime controller.
 
-Design robot features, game rules, field definitions, and game interactions so they are easy to generate and change. An LLM working with mentor guidance should be able to port a new FRC game to `launchpad` within a few hours.
+Design robot features, game rules, field definitions, policy catalogs, and game interactions so they are easy to generate and change. An LLM working with mentor guidance should be able to port a new FRC game to `launchpad` within a few hours.
 
 ## Branch and season boundaries
 
@@ -30,6 +31,20 @@ Design robot features, game rules, field definitions, and game interactions so t
 - Add new-season robot features to the season branch first unless they are genuinely season-independent.
 - Back-port reusable engine or visualizer improvements to `master` through a pull request.
 - Before changing shared code, separate generic engine behavior from season-specific configuration.
+
+## Deterministic policy architecture
+
+- Keep `PolicyDefinition`, catalog registration, ordered evaluation, trace contracts, and controller orchestration season-independent.
+- Put season or neutral condition/goal IDs, object types, target semantics, scoring, and action expansion in the season adapter.
+- Match and Endgame are structural policy phases. AUTO, arbitrary boolean-expression trees, scripting languages, and season-state systems require separate product approval.
+- Evaluate rules from top to bottom with AND semantics. An empty condition list means always. Continue past a matching rule when its goal is unavailable, then use the phase fallback. Fail actionably if no configured goal resolves.
+- Condition evaluation, goal availability, and goal expansion are pure. Catalog definitions may inspect immutable engine and season state but must not mutate it.
+- Goal plans contain a semantic goal ID, optional target ID, ordered `ActionRequest`s, and a human-readable explanation. Every evaluation must produce a production-safe `PolicyDecisionTrace`.
+- Deterministic target selection must use engine-advertised legal targets, exclude targets rejected in the current unchanged state, sort by robot-footprint-to-zone distance, and break ties by ordinal zone ID.
+- Preserve exact endgame reevaluation by using the engine's opt-in `interruptAtEndgameStart` behavior. Do not change the default-disabled engine semantics used by other controllers.
+- `PolicyGoalDefinition.requiredFeatureIds` is presentation metadata for static prerequisites. Runtime availability still depends on live phase, engine state, targets, inventory, and action preconditions.
+- Derive feature-to-goal UI relationships from catalog metadata. Do not duplicate mappings in components. Preserve existing unavailable policy references with warnings, disable unavailable new goal selections, and never silently rewrite student policies when features change.
+- Deterministic simulation requests contain policy, selected features, robot customization, and NavGrid. Do not add an LLM session, provider configuration, token accounting, or generation lock to the primary endpoint.
 
 ## Engineering guidelines
 
@@ -73,7 +88,7 @@ needed.
   20-24px backdrop blur, and one soft shadow. Avoid stacked borders, heavy glow,
   or multiple competing shadow styles.
 - Use an 8px spacing rhythm. Keep dense transport controls compact while giving
-  strategy inputs and the field generous breathing room.
+  policy inputs and the field generous breathing room.
 - The desktop visualizer targets viewports at least 1024px wide. Preserve a
   field-first hierarchy rather than shrinking the field to accommodate panels.
 
@@ -90,6 +105,11 @@ needed.
   accessible names for every icon-only control.
 - Orange communicates actions; blue communicates data. Do not mix their roles
   merely to add color.
+- Show robot-feature and policy-goal relationships on both surfaces. Expanded
+  feature cards should identify enabled goals and current policy use; the policy
+  editor should show static requirements and explain missing capabilities.
+  Warning states use conventional warning colors and must not block generation
+  when runtime fallbacks can still resolve the policy.
 
 ### Field and season boundaries
 
@@ -106,7 +126,7 @@ needed.
 
 - For non-trivial changes, begin in read-only plan mode (`/plan`) and present the implementation plan for user review before editing files.
 - Inspect the relevant existing code and conventions before proposing or implementing changes.
-- After modifying code, run `npm run test` and resolve failures caused by the change.
+- After modifying code, run `npm run test`, `npm run typecheck`, and `npm run build`; resolve failures caused by the change.
 - Keep terminal output and file modifications cleanly separated and easy to review.
 - If a task stalls and no safe progress remains, stop and provide a structured handoff containing:
   - the requested outcome;
